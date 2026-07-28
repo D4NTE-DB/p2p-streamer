@@ -25,6 +25,20 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 2. **Node.js headless core — the Engine.** Runs locally. Manages BitTorrent TCP/UDP/WebRTC sockets. Exposes a local HTTP server on `127.0.0.1:8080`.
 3. **Local HTTP proxy — the Bridge.** Converts standard HTTP GET requests from VLC (or an HTML5 `<video>` tag) into P2P chunk downloads. Must support HTTP 206 Partial Content (Range Requests) so users can scrub/seek.
 
+## Codebase Structure
+
+The frontend codebase is organized to separate concerns, making it modular and maintainable.
+
+*   **`src/App.tsx`**: The primary container component. It manages all application state (`useState`), handles side effects like API calls and Firebase subscriptions (`useEffect`), defines all event handlers, and composes the UI by passing state and props to presentational components.
+
+*   **`src/components/`**: This directory contains all presentational (UI) React components. Each component is in its own file. Key components include `Header.tsx`, `SearchPanel.tsx`, `StreamItem.tsx`, `LibraryPanel.tsx`, and `SuggestionPanel.tsx`.
+
+*   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK (Auth and Firestore) and validates the necessary environment variables.
+
+*   **`src/constants.ts`**: A central file for application-wide constants like API endpoints and cache settings.
+
+*   **`src/types.ts`**: Contains all shared TypeScript type definitions and interfaces (e.g., `StreamMetadata`, `LibraryItem`), ensuring type safety.
+
 ## Critical mechanisms & business logic
 
 Apply these rules to any code you generate for this project:
@@ -38,11 +52,12 @@ Apply these rules to any code you generate for this project:
 
 ## Coding standards
 
-- **TypeScript strictness:** precise interfaces for API responses and Firestore documents; never use `any`; handle missing/inconsistent Torrentio fields gracefully.
+- **TypeScript strictness:** precise interfaces for API responses (`TorrentioStream`) and Firestore documents (`LibraryItem`); never use `any`; handle missing/inconsistent Torrentio fields gracefully. All types are centralized in `src/types.ts`.
+- **Firebase Interaction:** All Firestore operations (CRUD for the `library` collection) are performed in `App.tsx` and are user-specific, scoped to `users/{userId}/library`. Authentication is handled via Firebase Anonymous Auth.
 - **React Compiler compatibility:** don't hand-write `useMemo`/`useCallback` unless a third-party library specifically requires it — assume the compiler handles memoization.
 - **Error handling:** wrap every API call and P2P socket event in `try/catch` or `.on('error')`. The UI must always reflect network state (loading, buffering, error) and must never crash silently.
 - **List rendering:** key stream lists on `` `${stream.infoHash}-${idx}` `` (index appended), since Torrentio frequently returns duplicate info hashes.
-- **UI aesthetic:** when touching the UI, preserve the existing Tailwind dark-mode look — slate/gray/blue palette, glassmorphism elements.
+- **UI aesthetic (Tailwind CSS):** When touching the UI, strictly preserve the existing dark-mode aesthetic. Use the established color palette (`bg-gray-950`, `bg-gray-900`, `border-gray-800`, `text-blue-400`, `text-gray-300`) and component styles (rounded corners like `rounded-xl`, glassmorphism effects like `bg-blue-500/10`, and border styles like `border-blue-500/20`).
 
 ## How to respond
 

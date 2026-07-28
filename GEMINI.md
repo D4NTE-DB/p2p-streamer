@@ -34,6 +34,37 @@ This `GEMINI.md` file provides essential instructions and context for the `p2p-s
 
 Guidelines for contributing to this project are to be defined by project maintainers.
 
+## Codebase Structure & Refactoring
+
+The main application logic resides in `src/App.tsx`. To improve readability and maintainability, the original monolithic `App` component has been refactored. The application now follows a standard React project structure, separating concerns into different files and directories.
+
+### Codebase Breakdown
+
+*   **`src/App.tsx`**: This is the primary container component. It is responsible for:
+    *   **State Management**: All application state (user, library, search results, UI state) is managed here using `useState`.
+    *   **Side Effects**: All side effects, such as Firebase authentication, Firestore subscriptions, and API calls, are handled here using `useEffect`.
+    *   **Logic & Handlers**: All event handlers (`searchTorrentio`, `saveToLibrary`, etc.) are defined here.
+    *   **Composition**: It renders the overall application layout by importing and composing the presentational components, passing the necessary state and handlers to them as props.
+
+*   **`src/components/`**: This directory contains all the presentational (UI) React components. Each component is in its own file, making them reusable and easy to manage.
+    *   `FullScreenLoader.tsx`: A simple loading spinner shown while the user is being authenticated.
+    *   `Header.tsx`: The main application header, showing the title and user information.
+    *   `InitErrorScreen.tsx`: Displays a fatal error if Firebase fails to initialize.
+    *   `LibraryItemCard.tsx`: Renders a single item from the user's library with a button to remove it. It is memoized with `React.memo`.
+    *   `LibraryPanel.tsx`: The sidebar component that displays the user's saved "Cloud Library".
+    *   `SearchPanel.tsx`: Contains the search input form and quality filter checkboxes.
+    *   `StreamItem.tsx`: Renders a single torrent stream result with its details and action buttons. It is memoized with `React.memo`.
+    *   `SuggestionPanel.tsx`: Displays the movie poster for the current search result.
+    *   `SystemStatusPanel.tsx`: A static informational panel about the conceptual local proxy.
+
+*   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK, including Auth and Firestore instances. It also includes validation for the necessary environment variables.
+
+*   **`src/constants.ts`**: A central place for application-wide constants, such as API endpoints, quality categories, and cache settings.
+
+*   **`src/types.ts`**: Contains all shared TypeScript type definitions and interfaces (e.g., `StreamMetadata`, `LibraryItem`), ensuring type safety across the application.
+
+This refactoring separates the application's concerns: the `App` component is the "brain" that holds the state and logic, while the components in the `src/components` directory are "dumb" renderers. This makes the code easier to understand, debug, and maintain.
+
 ## Further Documentation
 
 *   **API Documentation:** To be provided by project maintainers, if applicable.

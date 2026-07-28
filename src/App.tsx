@@ -1,86 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Search, Play, Heart, Trash2, HardDrive, Users, Settings, 
-  CheckCircle, AlertCircle, Loader2, MonitorPlay, Film
+  CheckCircle, AlertCircle, Loader2
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
+import { signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, deleteDoc, 
-  onSnapshot, query, serverTimestamp, type FieldValue, type Timestamp
+  collection, doc, setDoc, deleteDoc, 
+  onSnapshot, query, serverTimestamp
 } from 'firebase/firestore';
 
-// --- TYPESCRIPT INTERFACES ---
-interface StreamMetadata {
-  id: string;
-  infoHash: string;
-  parsedQuality: string;
-  seeders: number;
-  size: string;
-  tracker: string;
-  cleanTitle: string;
-  rawTitle: string;
-}
+import { auth, db, firebaseConfig, firebaseConfigValid, firebaseConfigValidationMessages } from './firebase';
+import { CINEMETA_API_URL, TORRENTIO_API_URL, QUALITY_CATEGORIES, PLAYING_TOAST_DURATION, CACHE_MAX_SIZE } from './constants';
+import type { StreamMetadata, CategorizedStreams, TorrentioStream, LibraryItem, CachedSearch } from './types';
 
-interface CategorizedStreams {
-  '4K': StreamMetadata[];
-  '1080p': StreamMetadata[];
-  '720p': StreamMetadata[];
-  'SD/Other': StreamMetadata[];
-  [key: string]: StreamMetadata[]; // Index signature for dynamic access
-}
-
-interface TorrentioStream {
-  title: string;
-  name: string;
-  infoHash: string;
-  url: string;
-}
-
-interface LibraryItem {
-  id: string;
-  infoHash: string;
-  quality: string;
-  size: string;
-  title: string;
-  savedAt?: Timestamp | FieldValue;
-}
-
-interface CachedSearch {
-  movieTitle: string;
-  streams: CategorizedStreams;
-}
+import { InitErrorScreen } from './components/InitErrorScreen';
+import { FullScreenLoader } from './components/FullScreenLoader';
+import { Header } from './components/Header';
+import { SearchPanel } from './components/SearchPanel';
+import { StreamItem } from './components/StreamItem';
+import { LibraryPanel } from './components/LibraryPanel';
+import { SystemStatusPanel } from './components/SystemStatusPanel';
+import { SuggestionPanel } from './components/SuggestionPanel';
 
 // Global declarations for environment variables injected by the platform
 declare global {
   var __initial_auth_token: string | undefined;
 }
 
-// --- CONSTANTS ---
-const CINEMETA_API_URL = 'https://v3-cinemeta.strem.io';
-const TORRENTIO_API_URL = 'https://torrentio.strem.fun';
-const QUALITY_CATEGORIES: (keyof CategorizedStreams)[] = ['4K', '1080p', '720p', 'SD/Other'];
-const PLAYING_TOAST_DURATION = 3000;
-
-// --- FIREBASE INITIALIZATION ---
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
 const appId = import.meta.env.VITE_APP_ID || 'p2p-streaming-app';
 
 // --- IN-MEMORY METADATA CACHE ---
 const API_CACHE = new Map<string, CachedSearch>();
-const CACHE_MAX_SIZE = 20; // Cap at 20 recent searches
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -89,8 +38,10 @@ export default function App() {
   // Torrentio State
   const [searchQuery, setSearchQuery] = useState<string>('The Matrix'); 
   const [movieTitle, setMovieTitle] = useState<string>(''); 
+  const [posterUrl, setPosterUrl] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [initError, setInitError] = useState<string>('');
   const [categorizedStreams, setCategorizedStreams] = useState<CategorizedStreams>({ '4K': [], '1080p': [], '720p': [], 'SD/Other': [] });
   
   // UI State
@@ -101,7 +52,7 @@ export default function App() {
   const [selectedQualities, setSelectedQualities] = useState<Record<string, boolean>>({
     '4K': true,
     '1080p': true,
-    '720p': true,
+    '720p': false,
     'SD/Other': true
   });
 
@@ -118,20 +69,33 @@ export default function App() {
   // 1. Initialize Auth
   useEffect(() => {
     const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token).catch(() => signInAnonymously(auth));
-      } else {
-        await signInAnonymously(auth);
+      if (!firebaseConfigValid || !auth) {
+        setInitError(firebaseConfigValidationMessages.join('; '));
+        return;
+      }
+
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token).catch(() => signInAnonymously(auth));
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err: unknown) {
+        setInitError(err instanceof Error ? err.message : 'Firebase auth failed');
       }
     };
+
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    let unsubscribe = () => {};
+    if (auth) {
+      unsubscribe = onAuthStateChanged(auth, setUser);
+    }
     return () => unsubscribe();
   }, []);
 
   // 2. Fetch User Library (CRUD - Read)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     const q = query(collection(db, 'artifacts', appId, 'users', user.uid, 'library'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LibraryItem));
@@ -151,6 +115,7 @@ export default function App() {
     if (API_CACHE.has(queryKey)) {
       const cachedData = API_CACHE.get(queryKey)!;
       setMovieTitle(cachedData.movieTitle);
+      setPosterUrl(cachedData.posterUrl);
       setCategorizedStreams(cachedData.streams);
       
       const availableQualities = QUALITY_CATEGORIES.filter(
@@ -163,6 +128,7 @@ export default function App() {
     setLoading(true);
     setError('');
     setMovieTitle('');
+    setPosterUrl('');
     setCategorizedStreams({ '4K': [], '1080p': [], '720p': [], 'SD/Other': [] });
 
     try {
@@ -170,6 +136,7 @@ export default function App() {
       let expectedTitle = '';
       let expectedYear = '';
 
+      let fetchedPosterUrl = '';
       if (!/^tt\d+$/i.test(targetImdbId)) {
         const searchRes = await fetch(`${CINEMETA_API_URL}/catalog/movie/top/search=${encodeURIComponent(targetImdbId)}.json`);
         const searchData = await searchRes.json();
@@ -190,6 +157,7 @@ export default function App() {
           if (metaData?.meta?.name) {
             expectedTitle = metaData.meta.name;
             expectedYear = metaData?.meta?.year || '';
+            fetchedPosterUrl = metaData.meta.poster || '';
           }
         } catch (err) {
           console.warn("Could not fetch Cinemeta info, skipping title validation.");
@@ -198,6 +166,7 @@ export default function App() {
       
       const fullMovieTitle = expectedYear ? `${expectedTitle} (${expectedYear})` : expectedTitle;
       setMovieTitle(fullMovieTitle);
+      setPosterUrl(fetchedPosterUrl);
 
       const res = await fetch(`${TORRENTIO_API_URL}/stream/movie/${targetImdbId}.json`);
       if (!res.ok) throw new Error('Failed to fetch from Torrentio');
@@ -207,7 +176,7 @@ export default function App() {
         throw new Error('No streams found for this movie.');
       }
 
-      processStreams(data.streams || [], expectedTitle, queryKey, fullMovieTitle);
+      processStreams(data.streams || [], expectedTitle, queryKey, fullMovieTitle, fetchedPosterUrl);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An unknown network error occurred.');
     } finally {
@@ -216,7 +185,7 @@ export default function App() {
   };
 
   // 4. Organize by Quality and sort by Seeders
-  const processStreams = (streams: TorrentioStream[], expectedTitle: string, queryKey: string, fullMovieTitle: string) => {
+  const processStreams = (streams: TorrentioStream[], expectedTitle: string, queryKey: string, fullMovieTitle: string, posterUrl: string) => {
     const categories: CategorizedStreams = { '4K': [], '1080p': [], '720p': [], 'SD/Other': [] };
 
     const titleWords = expectedTitle 
@@ -266,15 +235,15 @@ export default function App() {
       });
     });
 
-    Object.keys(categories).forEach(q => {
-      categories[q].sort((a, b) => b.seeders - a.seeders);
+    Object.keys(categories).forEach(key => {
+      categories[key as keyof CategorizedStreams].sort((a, b) => b.seeders - a.seeders);
     });
 
     if (API_CACHE.size >= CACHE_MAX_SIZE) {
       const oldestKey = API_CACHE.keys().next().value;
       if (oldestKey) API_CACHE.delete(oldestKey); 
     }
-    API_CACHE.set(queryKey, { movieTitle: fullMovieTitle, streams: categories });
+    API_CACHE.set(queryKey, { movieTitle: fullMovieTitle, streams: categories, posterUrl });
 
     setCategorizedStreams(categories);
     
@@ -287,7 +256,7 @@ export default function App() {
   };
 
   const saveToLibrary = async (stream: StreamMetadata) => {
-    if (!user || !stream.infoHash) return;
+    if (!user || !stream.infoHash || !db) return;
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'library', stream.infoHash);
     await setDoc(docRef, {
       infoHash: stream.infoHash,
@@ -299,7 +268,7 @@ export default function App() {
   };
 
   const removeFromLibrary = async (infoHash: string) => {
-    if (!user || !infoHash) return;
+    if (!user || !infoHash || !db) return;
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'library', infoHash);
     await deleteDoc(docRef);
   };
@@ -311,26 +280,16 @@ export default function App() {
 
   const isSaved = (infoHash: string) => library.some(item => item.infoHash === infoHash);
 
-  if (!user) return <div className="flex h-screen items-center justify-center bg-gray-900 text-white"><Loader2 className="w-8 h-8 animate-spin" /></div>;
+  if (initError) {
+    return <InitErrorScreen error={initError} config={firebaseConfig} />;
+  }
+
+  if (!user) return <FullScreenLoader />;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 font-sans">
       
-      {/* Header & User Info */}
-      <header className="flex justify-between items-center mb-8 bg-gray-900 p-4 rounded-xl border border-gray-800 shadow-lg">
-        <div className="flex items-center gap-3">
-          <MonitorPlay className="w-8 h-8 text-blue-500" />
-          <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">P2P Streamer</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="text-sm text-gray-400">
-            User ID: <span className="text-gray-300 font-mono text-xs">{user.uid.slice(0, 8)}...</span>
-          </div>
-          <span className="px-3 py-1 bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 rounded-full text-xs font-medium">
-            Pro Plan (Active)
-          </span>
-        </div>
-      </header>
+      <Header user={user} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
@@ -338,53 +297,15 @@ export default function App() {
         <div className="lg:col-span-2 space-y-6">
           
           {/* Search Bar */}
-          <div className="bg-gray-900 p-6 rounded-xl border border-gray-800">
-            <h2 className="text-lg font-semibold mb-4">Search via Torrentio</h2>
-            <form onSubmit={searchTorrentio} className="flex gap-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-                <input 
-                  type="text" 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Movie title (e.g. Inception) or IMDB ID (e.g. tt1375666)"
-                  className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg pl-10 pr-4 py-3 focus:outline-none focus:border-blue-500 transition-colors"
-                />
-              </div>
-              <button 
-                type="submit" 
-                disabled={loading}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Scrape'}
-              </button>
-            </form>
-            <p className="text-xs text-gray-500 mt-3">Try: tt1630029 (Avatar 2), tt0111161 (Shawshank Redemption)</p>
-            
-            {/* Quality Filters */}
-            <div className="mt-5 flex flex-wrap items-center gap-4 border-t border-gray-800 pt-4">
-              <span className="text-sm text-gray-400 font-medium">Show Qualities:</span>
-              {Object.keys(selectedQualities).map(q => (
-                <label key={q} className="flex items-center gap-2 cursor-pointer text-sm text-gray-300 hover:text-white transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={selectedQualities[q]}
-                    onChange={() => setSelectedQualities(prev => ({ ...prev, [q]: !prev[q] }))}
-                    className="w-4 h-4 rounded bg-gray-900 border-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900 cursor-pointer accent-blue-600"
-                  />
-                  {q}
-                </label>
-              ))}
-            </div>
-
-            {/* Display Found Movie Title */}
-            {movieTitle && (
-              <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg flex items-center gap-3">
-                <Film className="w-5 h-5 text-blue-400" />
-                <span className="text-blue-100 font-medium">Found Media: {movieTitle}</span>
-              </div>
-            )}
-          </div>
+          <SearchPanel
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            searchTorrentio={searchTorrentio}
+            loading={loading}
+            selectedQualities={selectedQualities}
+            setSelectedQualities={setSelectedQualities}
+            movieTitle={movieTitle}
+          />
 
           {/* Results Area */}
           {error && (
@@ -441,7 +362,7 @@ export default function App() {
               
               {/* Tabs */}
               <div className="flex border-b border-gray-800">
-                {Object.keys(categorizedStreams)
+                {(Object.keys(categorizedStreams) as Array<keyof CategorizedStreams>)
                   .filter(quality => selectedQualities[quality])
                   .map(quality => (
                   <button
@@ -449,67 +370,30 @@ export default function App() {
                     onClick={() => setActiveTab(quality)}
                     className={`flex-1 py-4 text-sm font-medium transition-colors ${
                       activeTab === quality 
-                        ? 'text-blue-400 border-b-2 border-blue-400 bg-blue-500/5' 
+                        ? 'text-blue-400 border-b-2 border-blue-400 bg-blue-500/5'
                         : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
                     }`}
                   >
-                    {quality} ({categorizedStreams[quality].length})
+                    {quality} ({categorizedStreams[quality]!.length})
                   </button>
                 ))}
               </div>
 
               {/* Stream List */}
               <div className="divide-y divide-gray-800 max-h-[600px] overflow-y-auto">
-                {!selectedQualities[activeTab] ? (
+                {!selectedQualities[activeTab as keyof typeof selectedQualities] ? (
                    <div className="p-8 text-center text-gray-500">This quality is hidden by your filters.</div>
-                ) : categorizedStreams[activeTab].length === 0 ? (
+                ) : categorizedStreams[activeTab as keyof CategorizedStreams].length === 0 ? (
                   <div className="p-8 text-center text-gray-500">No streams found for this quality.</div>
                 ) : (
-                  categorizedStreams[activeTab].map((stream, idx) => (
-                    <div key={`${stream.id || 'stream'}-${idx}`} className="p-4 hover:bg-gray-800/50 transition-colors flex items-center justify-between group">
-                      
-                      <div className="flex-1 min-w-0 pr-4">
-                        <div className="mb-2">
-                          <span className="text-sm font-semibold text-gray-200 block truncate" title={stream.cleanTitle}>
-                            {stream.cleanTitle}
-                          </span>
-                        </div>
-                        
-                        <div className="flex items-center gap-4 text-sm">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-300">
-                            {stream.tracker}
-                          </span>
-                          <div className="flex items-center gap-1.5 text-green-400">
-                            <Users className="w-4 h-4" />
-                            <span className="font-bold">{stream.seeders}</span> Seeds
-                          </div>
-                          <div className="flex items-center gap-1.5 text-gray-400">
-                            <HardDrive className="w-4 h-4" />
-                            {stream.size}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={() => isSaved(stream.infoHash) ? removeFromLibrary(stream.infoHash) : saveToLibrary(stream)}
-                          className={`p-2 rounded-full border transition-colors ${
-                            isSaved(stream.infoHash)
-                              ? 'bg-red-500/10 border-red-500/20 text-red-500 hover:bg-red-500/20'
-                              : 'border-gray-700 text-gray-400 hover:text-white hover:border-gray-500'
-                          }`}
-                          title={isSaved(stream.infoHash) ? "Remove from Library" : "Save to Library"}
-                        >
-                          <Heart className="w-4 h-4" fill={isSaved(stream.infoHash) ? "currentColor" : "none"} />
-                        </button>
-                        <button 
-                          onClick={() => playLocally(stream)}
-                          className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-full font-bold hover:bg-gray-200 transition-colors"
-                        >
-                          <Play className="w-4 h-4 fill-black" /> Play
-                        </button>
-                      </div>
-                    </div>
+                  categorizedStreams[activeTab as keyof CategorizedStreams].map((stream, idx) => (
+                    <StreamItem
+                      key={`${stream.id || 'stream'}-${idx}`}
+                      stream={stream}
+                      isSaved={isSaved(stream.infoHash)}
+                      onSaveToggle={() => isSaved(stream.infoHash) ? removeFromLibrary(stream.infoHash) : saveToLibrary(stream)}
+                      onPlay={() => playLocally(stream)}
+                    />
                   ))
                 )}
               </div>
@@ -519,51 +403,9 @@ export default function App() {
 
         {/* Sidebar: Cloud Library */}
         <div className="space-y-6">
-          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-            <div className="flex items-center gap-2 mb-6 text-gray-100">
-              <Heart className="w-5 h-5 text-red-500 fill-red-500" />
-              <h2 className="text-lg font-semibold">Cloud Library</h2>
-            </div>
-            
-            {library.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-8">
-                Your library is empty. Save streams here to sync across devices.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {library.map(item => (
-                  <div key={item.id} className="bg-gray-800/50 p-3 rounded-lg border border-gray-700/50 relative group">
-                    <div className="pr-8">
-                      <span className="inline-block px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[10px] font-bold mb-1">
-                        {item.quality}
-                      </span>
-                      <p className="text-sm text-gray-300 truncate" title={item.title}>{item.title}</p>
-                      <p className="text-xs text-gray-500 mt-1">{item.size}</p>
-                    </div>
-                    <button 
-                      onClick={() => removeFromLibrary(item.id)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          {/* Architecture Reminder Panel */}
-          <div className="bg-blue-900/20 rounded-xl border border-blue-500/20 p-5 text-sm text-blue-200/80">
-            <div className="flex items-center gap-2 text-blue-400 mb-2 font-semibold">
-              <Settings className="w-4 h-4" />
-              System Status
-            </div>
-            <ul className="space-y-1.5 ml-5 list-disc">
-              <li>Node.js Local Proxy: <span className="text-gray-400">Awaiting InfoHash</span></li>
-              <li>RAM Buffer: <span className="text-gray-400">Idle (0 MB)</span></li>
-              <li>Seeding Policy: <span className="text-green-400">Adaptive (Active)</span></li>
-            </ul>
-          </div>
+          <SuggestionPanel posterUrl={posterUrl} movieTitle={movieTitle} />
+          <LibraryPanel library={library} onRemove={removeFromLibrary} />
+          <SystemStatusPanel />
         </div>
 
       </div>
