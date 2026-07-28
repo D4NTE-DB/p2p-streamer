@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Hls from 'hls.js';
 import { 
   CheckCircle, AlertCircle, Loader2, X, ExternalLink
 } from 'lucide-react';
@@ -267,18 +268,53 @@ export default function App() {
     });
   };
 
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // HLS.js Player Integration for Stremio-Style Transcoding
+  useEffect(() => {
+    if (!playingStreamUrl || !videoRef.current) return;
+
+    const isHls = playingStreamUrl.includes('/hls-stream/') || playingStreamUrl.endsWith('.m3u8');
+
+    if (isHls && Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+      });
+      hls.loadSource(playingStreamUrl);
+      hls.attachMedia(videoRef.current);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        videoRef.current?.play().catch(e => console.log('Autoplay prevented:', e));
+      });
+      return () => {
+        hls.destroy();
+      };
+    } else if (isHls && videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = playingStreamUrl;
+    }
+  }, [playingStreamUrl]);
+
   const removeFromLibrary = async (infoHash: string) => {
     if (!user || !infoHash || !db) return;
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'library', infoHash);
     await deleteDoc(docRef);
   };
 
-  const playInBrowser = (infoHash: string, title?: string, transcode: boolean = false) => {
-    const localProxyUrl = transcode 
-      ? `http://localhost:8888/stream-transcoded/${infoHash}` 
-      : `http://localhost:8888/stream/${infoHash}`;
+  const playInBrowser = (infoHash: string, title?: string, mode: 'raw' | 'transcode' | 'hls' = 'raw') => {
+    let localProxyUrl = `http://localhost:8888/stream/${infoHash}`;
+    if (mode === 'transcode') {
+      localProxyUrl = `http://localhost:8888/stream-transcoded/${infoHash}`;
+    } else if (mode === 'hls') {
+      localProxyUrl = `http://localhost:8888/hls-stream/${infoHash}/index.m3u8`;
+    }
     setPlayingStreamUrl(localProxyUrl);
-    setToastMessage(transcode ? `Transcoding & Streaming: ${title || infoHash}` : `Streaming in Browser: ${title || infoHash}`);
+    setToastMessage(
+      mode === 'hls' 
+        ? `HLS Transcoding & Streaming: ${title || infoHash}`
+        : mode === 'transcode'
+        ? `Transcoding & Streaming: ${title || infoHash}` 
+        : `Streaming in Browser: ${title || infoHash}`
+    );
     setTimeout(() => setToastMessage(null), PLAYING_TOAST_DURATION);
   };
 
@@ -468,25 +504,28 @@ export default function App() {
                   </div>
                   <div className="p-1 bg-black">
                       <video
+                          ref={videoRef}
                           key={playingStreamUrl} // Key forces re-mount on new stream
                           className="w-full aspect-video"
                           controls
                           autoPlay
+                          src={playingStreamUrl?.includes('/hls-stream/') ? undefined : (playingStreamUrl || undefined)}
                           onError={(e) => {
                               console.error('Video player error:', e);
-                              const infoHash = playingStreamUrl?.split('/').pop();
-                              if (infoHash && !playingStreamUrl?.includes('stream-transcoded')) {
-                                setToastMessage('Browser HTML5 cannot decode container. Trying On-the-Fly Transcoding...');
-                                playInBrowser(infoHash, undefined, true);
+                              const matches = playingStreamUrl?.match(/(?:stream|stream-transcoded|hls-stream)\/([a-fA-F0-9]{40})/);
+                              const infoHash = matches ? matches[1] : null;
+
+                              if (infoHash && !playingStreamUrl?.includes('/hls-stream/')) {
+                                setToastMessage('Browser HTML5 cannot decode container. Switching to Stremio HLS Transcoding...');
+                                playInBrowser(infoHash, undefined, 'hls');
                               } else if (infoHash) {
-                                setToastMessage('Transcoding failed. Opening in VLC...');
+                                setToastMessage('HLS Transcoding failed. Opening stream in VLC...');
                                 playInVLC(infoHash);
                               } else {
                                 setToastMessage('Failed to load video. Ensure the local Node.js proxy is running.');
                               }
                           }}
                       >
-                          <source src={playingStreamUrl} />
                           Your browser does not support the video tag.
                       </video>
                   </div>

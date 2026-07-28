@@ -5,6 +5,9 @@ import rangeParser from 'range-parser';
 import { exec } from 'child_process';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic as unknown as string);
@@ -20,6 +23,15 @@ process.on('unhandledRejection', (reason: any) => {
 
 const app = express();
 const port = 8888;
+
+// Create temp directory for HLS segments
+const HLS_TEMP_DIR = path.join(os.tmpdir(), 'p2p-streamer-hls');
+if (!fs.existsSync(HLS_TEMP_DIR)) {
+  fs.mkdirSync(HLS_TEMP_DIR, { recursive: true });
+}
+
+// Serve static HLS segments
+app.use('/hls', express.static(HLS_TEMP_DIR));
 
 // Use CORS to allow requests from the React frontend (e.g., http://localhost:5173)
 app.use(cors());
@@ -40,6 +52,9 @@ const PUBLIC_TRACKERS = [
   'udp://explodie.org:6969/announce',
   'udp://open.demonii.com:1337/announce'
 ];
+
+// Map of active HLS transcode ffmpeg processes by infoHash
+const activeHlsProcesses = new Map<string, any>();
 
 function getMimeType(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
@@ -74,6 +89,17 @@ function formatBytes(bytes: number | undefined | null): string {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function isClientAbortError(err: any): boolean {
+  const msg = err?.message || String(err);
+  return (
+    msg.includes('Writable stream closed') ||
+    msg.includes('ERR_STREAM_PREMATURE_CLOSE') ||
+    msg.includes('aborted') ||
+    msg.includes('ECANCELED') ||
+    msg.includes('Premature close')
+  );
 }
 
 function serveStream(torrent: any, req: express.Request, res: express.Response) {
@@ -118,7 +144,9 @@ function serveStream(torrent: any, req: express.Request, res: express.Response) 
     });
 
     stream.on('error', (err: any) => {
-      console.error(`[Server] Stream error for ${file.name}:`, err.message);
+      if (!isClientAbortError(err)) {
+        console.error(`[Server] Stream error for ${file.name}:`, err.message);
+      }
       if (!res.headersSent) res.status(500).send('Stream error');
     });
   } else {
@@ -132,7 +160,9 @@ function serveStream(torrent: any, req: express.Request, res: express.Response) 
     });
 
     stream.on('error', (err: any) => {
-      console.error(`[Server] Stream error for ${file.name}:`, err.message);
+      if (!isClientAbortError(err)) {
+        console.error(`[Server] Stream error for ${file.name}:`, err.message);
+      }
       if (!res.headersSent) res.status(500).send('Stream error');
     });
   }
@@ -166,6 +196,118 @@ app.get('/stream/:infoHash', async (req, res) => {
   } catch (err: any) {
     console.error(`[Server] Stream setup error:`, err.message);
     if (!res.headersSent) res.status(500).send('Stream setup error');
+  }
+});
+
+// HLS Live Transcoding Endpoint for Web Player Compatibility (Stremio-style)
+app.get('/hls-stream/:infoHash/index.m3u8', async (req, res) => {
+  const { infoHash } = req.params;
+
+  if (!infoHash) {
+    return res.status(400).send('Missing infoHash');
+  }
+
+  console.log(`[Server] Received HLS stream request for infoHash: ${infoHash}`);
+
+  try {
+    let torrent = await client.get(infoHash);
+    if (!torrent) {
+      const torrentId = getMagnetUri(infoHash);
+      torrent = client.add(torrentId);
+    }
+
+    const startHlsTranscode = () => {
+      const targetDir = path.join(HLS_TEMP_DIR, infoHash);
+      const playlistFile = path.join(targetDir, 'index.m3u8');
+      const segmentPattern = path.join(targetDir, 'segment%03d.ts');
+
+      if (fs.existsSync(playlistFile) && fs.statSync(playlistFile).size > 0) {
+        return res.redirect(`/hls/${infoHash}/index.m3u8`);
+      }
+
+      if (activeHlsProcesses.has(infoHash)) {
+        // Wait for existing process to generate playlist
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (fs.existsSync(playlistFile) && fs.statSync(playlistFile).size > 0) {
+            clearInterval(checkInterval);
+            if (!res.headersSent) res.redirect(`/hls/${infoHash}/index.m3u8`);
+          } else if (attempts > 30) {
+            clearInterval(checkInterval);
+            if (!res.headersSent) res.status(500).send('HLS transcode timeout');
+          }
+        }, 500);
+        return;
+      }
+
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const file = torrent.files.reduce((a: any, b: any) => (a.length > b.length ? a : b));
+      console.log(`[Server] HLS Transcoding started for: ${file.name}`);
+
+      torrent.files.forEach((f: any) => {
+        if (f !== file) f.deselect();
+      });
+      file.select();
+
+      const stream = file.createReadStream() as any;
+
+      const command = ffmpeg(stream)
+        .videoCodec('libx264')
+        .audioCodec('aac')
+        .outputOptions([
+          '-preset ultrafast',
+          '-g 48',
+          '-sc_threshold 0',
+          '-hls_time 4',
+          '-hls_list_size 0',
+          '-hls_segment_filename', segmentPattern
+        ])
+        .output(playlistFile)
+        .on('start', () => {
+          let attempts = 0;
+          const checkInterval = setInterval(() => {
+            attempts++;
+            if (fs.existsSync(playlistFile) && fs.statSync(playlistFile).size > 0) {
+              clearInterval(checkInterval);
+              if (!res.headersSent) {
+                res.redirect(`/hls/${infoHash}/index.m3u8`);
+              }
+            } else if (attempts > 30) {
+              clearInterval(checkInterval);
+              if (!res.headersSent) res.status(500).send('HLS initialization timeout');
+            }
+          }, 400);
+        })
+        .on('error', (err) => {
+          if (!isClientAbortError(err)) {
+            console.error(`[Server] HLS error for ${file.name}:`, err.message);
+          }
+          activeHlsProcesses.delete(infoHash);
+          if (!res.headersSent) res.status(500).send('HLS Transcoding error');
+        })
+        .on('end', () => {
+          console.log(`[Server] HLS Transcode complete for infoHash: ${infoHash}`);
+          activeHlsProcesses.delete(infoHash);
+        });
+
+      activeHlsProcesses.set(infoHash, command);
+      command.run();
+    };
+
+    if (torrent.ready) {
+      startHlsTranscode();
+    } else {
+      torrent.once('ready', startHlsTranscode);
+      torrent.once('error', (err: Error) => {
+        console.error(`[Server] Torrent error during HLS transcode:`, err.message);
+        if (!res.headersSent) res.status(500).send('Torrent error');
+      });
+    }
+  } catch (err: any) {
+    console.error(`[Server] HLS setup error:`, err.message);
+    if (!res.headersSent) res.status(500).send('HLS setup error');
   }
 });
 
@@ -210,7 +352,9 @@ app.get('/stream-transcoded/:infoHash', async (req, res) => {
           '-tune zerolatency'
         ])
         .on('error', (err) => {
-          console.error(`[Server] Transcoding error for ${file.name}:`, err.message);
+          if (!isClientAbortError(err)) {
+            console.error(`[Server] Transcoding error for ${file.name}:`, err.message);
+          }
           if (!res.headersSent) res.status(500).send('Transcoding error');
         });
 
