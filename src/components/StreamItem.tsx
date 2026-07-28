@@ -1,15 +1,22 @@
 import React from 'react';
-import { Play, Heart, Users, HardDrive } from 'lucide-react';
+import { Play, Heart, Users, HardDrive, Tv, ExternalLink } from 'lucide-react';
 import type { StreamMetadata } from '../types';
 
 interface StreamItemProps {
   stream: StreamMetadata;
   isSaved: boolean;
   onSaveToggle: () => void;
-  onPlay: () => void;
+  onPlayInBrowser: () => void;
+  onPlayInVLC: () => void;
 }
 
-export const StreamItem = React.memo<StreamItemProps>(({ stream, isSaved, onSaveToggle, onPlay }) => (
+export const StreamItem = React.memo<StreamItemProps>(({ 
+  stream, 
+  isSaved, 
+  onSaveToggle, 
+  onPlayInBrowser, 
+  onPlayInVLC 
+}) => (
   <div className="p-4 hover:bg-gray-800/50 transition-colors flex items-center justify-between group">
     <div className="flex-1 min-w-0 pr-4">
       <div className="mb-2">
@@ -43,10 +50,18 @@ export const StreamItem = React.memo<StreamItemProps>(({ stream, isSaved, onSave
         <Heart className="w-4 h-4" fill={isSaved ? "currentColor" : "none"} />
       </button>
       <button
-        onClick={onPlay}
-        className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-full font-bold hover:bg-gray-200 transition-colors"
+        onClick={onPlayInBrowser}
+        className="flex items-center gap-1.5 bg-white text-black px-3.5 py-1.5 rounded-full text-xs font-bold hover:bg-gray-200 transition-colors"
+        title="Play in Local Browser Player"
       >
-        <Play className="w-4 h-4 fill-black" /> Play
+        <Tv className="w-3.5 h-3.5" /> Browser
+      </button>
+      <button
+        onClick={onPlayInVLC}
+        className="flex items-center gap-1.5 bg-orange-500/20 text-orange-400 border border-orange-500/30 hover:bg-orange-500/30 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors"
+        title="Launch Stream in VLC Player"
+      >
+        <ExternalLink className="w-3.5 h-3.5" /> VLC
       </button>
     </div>
   </div>

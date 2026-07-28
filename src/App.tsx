@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  CheckCircle, AlertCircle, Loader2
+  CheckCircle, AlertCircle, Loader2, X, ExternalLink
 } from 'lucide-react';
 import { signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
 import { 
@@ -46,8 +46,8 @@ export default function App() {
   
   // UI State
   const [activeTab, setActiveTab] = useState<string | number>('1080p');
-  const [playingStream, setPlayingStream] = useState<StreamMetadata | null>(null);
-  
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [playingStreamUrl, setPlayingStreamUrl] = useState<string | null>(null);
   // Quality Filters State
   const [selectedQualities, setSelectedQualities] = useState<Record<string, boolean>>({
     '4K': true,
@@ -273,9 +273,32 @@ export default function App() {
     await deleteDoc(docRef);
   };
 
-  const playLocally = (stream: StreamMetadata) => {
-    setPlayingStream(stream);
-    setTimeout(() => setPlayingStream(null), PLAYING_TOAST_DURATION); 
+  const playInBrowser = (infoHash: string, title?: string, transcode: boolean = false) => {
+    const localProxyUrl = transcode 
+      ? `http://localhost:8888/stream-transcoded/${infoHash}` 
+      : `http://localhost:8888/stream/${infoHash}`;
+    setPlayingStreamUrl(localProxyUrl);
+    setToastMessage(transcode ? `Transcoding & Streaming: ${title || infoHash}` : `Streaming in Browser: ${title || infoHash}`);
+    setTimeout(() => setToastMessage(null), PLAYING_TOAST_DURATION);
+  };
+
+  const playInVLC = (infoHash: string, title?: string) => {
+    setToastMessage(`Triggering VLC for: ${title || infoHash}...`);
+    fetch(`http://localhost:8888/play-vlc/${infoHash}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setToastMessage('VLC Player Launched successfully!');
+        } else {
+          setToastMessage('Failed to launch VLC. Check server logs.');
+        }
+      })
+      .catch(() => {
+        setToastMessage('Proxy server not reachable for VLC launch.');
+      })
+      .finally(() => {
+        setTimeout(() => setToastMessage(null), PLAYING_TOAST_DURATION);
+      });
   };
 
   const isSaved = (infoHash: string) => library.some(item => item.infoHash === infoHash);
@@ -315,11 +338,11 @@ export default function App() {
             </div>
           )}
 
-          {/* Playing Simulation Toast */}
-          {playingStream && (
+          {/* Generic Toast Message */}
+          {toastMessage && (
             <div className="bg-green-500/10 border border-green-500/20 text-green-400 p-4 rounded-xl flex items-center gap-3 animate-pulse">
               <CheckCircle className="w-5 h-5" />
-              Sending InfoHash to Local Node.js Proxy (Port 8080)... Opening VLC!
+              {toastMessage}
             </div>
           )}
 
@@ -392,7 +415,8 @@ export default function App() {
                       stream={stream}
                       isSaved={isSaved(stream.infoHash)}
                       onSaveToggle={() => isSaved(stream.infoHash) ? removeFromLibrary(stream.infoHash) : saveToLibrary(stream)}
-                      onPlay={() => playLocally(stream)}
+                      onPlayInBrowser={() => playInBrowser(stream.infoHash, stream.cleanTitle)}
+                      onPlayInVLC={() => playInVLC(stream.infoHash, stream.cleanTitle)}
                     />
                   ))
                 )}
@@ -404,11 +428,88 @@ export default function App() {
         {/* Sidebar: Cloud Library */}
         <div className="space-y-6">
           <SuggestionPanel posterUrl={posterUrl} movieTitle={movieTitle} />
-          <LibraryPanel library={library} onRemove={removeFromLibrary} />
+          <LibraryPanel 
+            library={library} 
+            onRemove={removeFromLibrary} 
+            onPlayInBrowser={playInBrowser}
+            onPlayInVLC={playInVLC}
+          />
           <SystemStatusPanel />
         </div>
 
       </div>
+
+      {playingStreamUrl && (
+          <div className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden">
+                  <div className="flex justify-between items-center p-4 bg-gray-900/80 border-b border-gray-800">
+                      <h3 className="text-lg font-semibold text-gray-200">In-Browser Player (Test)</h3>
+                      <div className="flex items-center gap-3">
+                          {playingStreamUrl && (
+                            <button
+                              onClick={() => {
+                                const infoHash = playingStreamUrl.split('/').pop();
+                                if (infoHash) playInVLC(infoHash);
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1 bg-orange-500/20 text-orange-400 border border-orange-500/30 hover:bg-orange-500/30 text-xs font-bold rounded-lg transition-colors"
+                              title="Open current stream in VLC player"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" /> Open in VLC
+                            </button>
+                          )}
+                          <button 
+                              onClick={() => setPlayingStreamUrl(null)} 
+                              className="text-gray-400 hover:text-white transition-colors rounded-full p-1"
+                              aria-label="Close player"
+                          >
+                              <X size={20} />
+                          </button>
+                      </div>
+                  </div>
+                  <div className="p-1 bg-black">
+                      <video
+                          key={playingStreamUrl} // Key forces re-mount on new stream
+                          className="w-full aspect-video"
+                          controls
+                          autoPlay
+                          onError={(e) => {
+                              console.error('Video player error:', e);
+                              const infoHash = playingStreamUrl?.split('/').pop();
+                              if (infoHash && !playingStreamUrl?.includes('stream-transcoded')) {
+                                setToastMessage('Browser HTML5 cannot decode container. Trying On-the-Fly Transcoding...');
+                                playInBrowser(infoHash, undefined, true);
+                              } else if (infoHash) {
+                                setToastMessage('Transcoding failed. Opening in VLC...');
+                                playInVLC(infoHash);
+                              } else {
+                                setToastMessage('Failed to load video. Ensure the local Node.js proxy is running.');
+                              }
+                          }}
+                      >
+                          <source src={playingStreamUrl} />
+                          Your browser does not support the video tag.
+                      </video>
+                  </div>
+                  <div className="p-4 text-xs text-gray-500 bg-gray-900/50 flex items-center justify-between">
+                      <div>
+                          <p><strong>Note:</strong> Browsers natively play MP4/WebM. For MKV/AVI/AC3 streams, the proxy will transcode on-the-fly, or you can use VLC for native hardware decoding.</p>
+                          <p className="mt-1 font-mono bg-gray-800 p-1.5 rounded-md text-[11px] text-gray-400">{playingStreamUrl}</p>
+                      </div>
+                      {playingStreamUrl && (
+                        <button
+                          onClick={() => {
+                            const infoHash = playingStreamUrl.split('/').pop();
+                            if (infoHash) playInVLC(infoHash);
+                          }}
+                          className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg text-xs shrink-0 ml-4 transition-colors"
+                        >
+                          Launch in VLC
+                        </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }

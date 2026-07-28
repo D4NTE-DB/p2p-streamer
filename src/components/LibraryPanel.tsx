@@ -5,10 +5,17 @@ import type { LibraryItem } from '../types';
 
 interface LibraryPanelProps {
   library: LibraryItem[];
-  onRemove: (id: string) => void;
+  onRemove: (infoHash: string) => void;
+  onPlayInBrowser: (infoHash: string, title: string) => void;
+  onPlayInVLC: (infoHash: string, title: string) => void;
 }
 
-export const LibraryPanel: React.FC<LibraryPanelProps> = ({ library, onRemove }) => (
+export const LibraryPanel: React.FC<LibraryPanelProps> = ({ 
+  library, 
+  onRemove, 
+  onPlayInBrowser, 
+  onPlayInVLC 
+}) => (
   <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
     <div className="flex items-center gap-2 mb-6 text-gray-100">
       <Heart className="w-5 h-5 text-red-500 fill-red-500" />
@@ -21,7 +28,13 @@ export const LibraryPanel: React.FC<LibraryPanelProps> = ({ library, onRemove })
     ) : (
       <div className="space-y-3">
         {library.map(item => (
-          <LibraryItemCard key={item.id} item={item} onRemove={() => onRemove(item.id)} />
+          <LibraryItemCard 
+            key={item.id} 
+            item={item} 
+            onRemove={() => onRemove(item.infoHash)} 
+            onPlayInBrowser={() => onPlayInBrowser(item.infoHash, item.title)}
+            onPlayInVLC={() => onPlayInVLC(item.infoHash, item.title)}
+          />
         ))}
       </div>
     )}
