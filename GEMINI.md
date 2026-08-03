@@ -34,6 +34,31 @@ This `GEMINI.md` file provides essential instructions and context for the `p2p-s
 
 Guidelines for contributing to this project are to be defined by project maintainers.
 
+## Codebase Structure & Architecture
+
+The application follows a modern, scalable React architecture using React Router for navigation and Redux Toolkit for global state management.
+
+### Codebase Breakdown
+
+*   **`src/App.tsx`**: The Root application wrapper. It handles the Redux `<Provider>`, React Router `<BrowserRouter>`, and sets up global listeners (like Firebase Auth and Firestore `onSnapshot`).
+*   **`src/store/`**: Contains the Redux Toolkit slices and thunks:
+    *   `authSlice.ts`: Manages user authentication state.
+    *   `librarySlice.ts`: Manages the user's saved items (Cloud Library).
+    *   `configSlice.ts`: Manages user preferences (quality filters, max torrent size filter, audio language preference, and sidebar state).
+    *   `playerSlice.ts`: Manages global video player state (`playingUrl`, `playingInfoHash`, `runtimeSeconds`).
+    *   `libraryThunks.ts`: Encapsulates async Firestore CRUD (`saveStreamToLibrary`, `removeStreamFromLibrary`) and playback initialization.
+*   **`src/layouts/`**:
+    *   `MainLayout.tsx`: The primary wrapper containing the responsive Side Navigation and Header with global movie search. Renders nested routes via `<Outlet />`.
+*   **`src/pages/`**: Dedicated page components:
+    *   `Dashboard.tsx`: The home page showing trending movie posters.
+    *   `StreamOptions.tsx`: The streaming page that scrapes Torrentio via the backend proxy, fetches Cinemeta movie runtime for timeline hints, filters by size and language, and toggles between poster preview and full-width video player mode with animated layout shift.
+    *   `Configuration.tsx`: User settings page for quality and torrent size limits.
+    *   `Login.tsx` & `Register.tsx`: Firebase Email/Password authentication.
+*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (with single-run blur progress reveal, Telemetry HUD overlay on hover, custom Cinemeta duration bar, and HLS support), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx`.
+*   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK.
+*   **`src/constants.ts`**: Application-wide constants.
+*   **`src/types.ts`**: Shared TypeScript type definitions.
+
 ## Further Documentation
 
 *   **API Documentation:** To be provided by project maintainers, if applicable.
