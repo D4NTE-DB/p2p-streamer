@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Hls from 'hls.js';
-import { X, AlertTriangle, Activity, Wifi, ArrowDown, ArrowUp } from 'lucide-react';
+import { MediaPlayer, MediaOutlet, MediaCommunitySkin } from '@vidstack/react';
+import type { MediaPlayerElement } from 'vidstack';
+import { X, AlertTriangle } from 'lucide-react';
+import { logPlaybackEvent } from '../utils/playerAnalytics';
 
 interface VideoPlayerProps {
   src: string;
@@ -10,13 +12,7 @@ interface VideoPlayerProps {
   onClose?: () => void;
 }
 
-interface TelemetryItem {
-  infoHash: string;
-  downloadSpeed: string;
-  uploadSpeed: string;
-  progress: string;
-  numPeers: number;
-}
+
 
 function formatSeconds(totalSeconds: number): string {
   if (!totalSeconds || isNaN(totalSeconds) || !isFinite(totalSeconds)) return '00:00';
@@ -36,7 +32,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   infoHash,
   onClose,
 }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<MediaPlayerElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [revealComplete, setRevealComplete] = useState(false);
   const [isFadingOut, setIsFadingOut] = useState(false);
@@ -48,13 +44,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [nativeDuration, setNativeDuration] = useState<number>(0);
 
-  // Telemetry HUD state
-  const [telemetry, setTelemetry] = useState<TelemetryItem | null>(null);
+
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src) return;
-
     setIsLoading(true);
     setRevealComplete(false);
     setIsFadingOut(false);
@@ -64,111 +56,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setCurrentTime(0);
     setNativeDuration(0);
 
-    let hls: Hls | null = null;
-    const isHlsUrl = src.includes('.m3u8') || src.includes('/hls-stream/') || src.includes('/cmaf-stream/');
+    logPlaybackEvent({
+      type: 'play',
+      infoHash,
+      timestamp: Date.now(),
+      detail: { src, poster }
+    });
+  }, [src, infoHash, poster]);
 
-    if (isHlsUrl && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
-      hls.loadSource(src);
-      hls.attachMedia(video);
 
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => {});
-      });
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.error("[HLS] Network error, attempting recovery...");
-              hls?.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.error("[HLS] Media error, attempting recovery...");
-              hls?.recoverMediaError();
-              break;
-            default:
-              setHasError(true);
-              setErrorMessage('Fatal HLS streaming error');
-              hls?.destroy();
-              break;
-          }
-        }
-      });
-    } else if (isHlsUrl && video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src;
-    } else {
-      video.src = src;
-    }
-
-    const handleCanPlay = () => setIsLoading(false);
-    const handlePlaying = () => setIsLoading(false);
-    const handleTimeUpdate = () => {
-      if (video) {
-        setCurrentTime(video.currentTime || 0);
-        if (video.duration && isFinite(video.duration)) {
-          setNativeDuration(video.duration);
-        }
-      }
-    };
-    const handleError = () => {
-      setHasError(true);
-      setErrorMessage('Failed to load video stream');
-      setIsLoading(false);
-    };
-
-    video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('playing', handlePlaying);
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('error', handleError);
-
-    return () => {
-      if (hls) {
-        hls.destroy();
-      }
-      video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('playing', handlePlaying);
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('error', handleError);
-    };
-  }, [src]);
-
-  // Telemetry stats polling
-  useEffect(() => {
-    let isMounted = true;
-    const fetchTelemetry = () => {
-      fetch('http://localhost:8888/stats')
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!isMounted || !data?.torrents) return;
-          const matched =
-            data.torrents.find((t: any) => t.infoHash === infoHash) ||
-            data.torrents[data.torrents.length - 1];
-          if (matched) {
-            setTelemetry({
-              infoHash: matched.infoHash,
-              downloadSpeed: matched.downloadSpeed || '0 B/s',
-              uploadSpeed: matched.uploadSpeed || '0 B/s',
-              progress: matched.progress || '0',
-              numPeers: matched.numPeers || 0,
-            });
-          }
-        })
-        .catch(() => {
-          if (isMounted) setTelemetry(null);
-        });
-    };
-
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 2500);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [infoHash]);
 
   // Smooth overlay fade-out when loading and reveal complete
   useEffect(() => {
@@ -188,36 +84,72 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   return (
     <div className="w-full bg-black aspect-video flex flex-col relative group rounded-xl overflow-hidden shadow-2xl border border-gray-800">
-      {/* Telemetry HUD Overlay (Visible on Hover at Top Left) */}
-      {telemetry && (
-        <div className="absolute top-3 left-3 z-30 flex items-center gap-3.5 px-3.5 py-2 rounded-xl bg-black/80 backdrop-blur-md border border-white/10 text-xs font-mono text-gray-200 shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-          <div className="flex items-center gap-1 text-blue-400 font-bold">
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>{telemetry.downloadSpeed}</span>
-          </div>
-          <div className="flex items-center gap-1 text-green-400 font-bold">
-            <ArrowUp className="w-3.5 h-3.5" />
-            <span>{telemetry.uploadSpeed}</span>
-          </div>
-          <div className="flex items-center gap-1 text-gray-400">
-            <Wifi className="w-3.5 h-3.5 text-yellow-400" />
-            <span>{telemetry.numPeers} Peers</span>
-          </div>
-          <div className="flex items-center gap-1 text-orange-400 font-bold border-l border-white/10 pl-2.5">
-            <Activity className="w-3.5 h-3.5" />
-            <span>Buf: {telemetry.progress}%</span>
-          </div>
-        </div>
-      )}
 
-      {/* Video Element */}
-      <video
-        ref={videoRef}
+      {/* Vidstack Media Player */}
+      <MediaPlayer
+        ref={playerRef}
+        src={src.includes('.m3u8') ? { src, type: 'application/x-mpegurl' } : { src, type: 'video/mp4' }}
+        poster={poster}
+        aspectRatio="16/9"
+        autoplay
+        playsinline
+        onCanPlay={() => setIsLoading(false)}
+        onPlaying={() => {
+          setIsLoading(false);
+          logPlaybackEvent({
+            type: 'play',
+            infoHash,
+            timestamp: Date.now(),
+          });
+        }}
+        onPause={(e: Record<string, any>) => {
+          logPlaybackEvent({
+            type: 'pause',
+            infoHash,
+            currentTime: e?.detail?.currentTime,
+            duration: e?.detail?.duration,
+            timestamp: Date.now(),
+          });
+        }}
+        onEnded={(e: Record<string, any>) => {
+          logPlaybackEvent({
+            type: 'ended',
+            infoHash,
+            duration: e?.detail?.duration,
+            timestamp: Date.now(),
+          });
+        }}
+        onWaiting={() => {
+          logPlaybackEvent({
+            type: 'buffering',
+            infoHash,
+            timestamp: Date.now(),
+          });
+        }}
+        onTimeUpdate={(e: Record<string, any>) => {
+          if (e?.detail?.currentTime) {
+            setCurrentTime(e.detail.currentTime);
+          }
+          if (e?.detail?.duration && isFinite(e.detail.duration)) {
+            setNativeDuration(e.detail.duration);
+          }
+        }}
+        onError={(e: Record<string, any>) => {
+          setHasError(true);
+          setErrorMessage('Failed to load video stream');
+          setIsLoading(false);
+          logPlaybackEvent({
+            type: 'error',
+            infoHash,
+            timestamp: Date.now(),
+            detail: { error: e?.detail },
+          });
+        }}
         className="w-full h-full object-contain"
-        controls
-        autoPlay
-        playsInline
-      />
+      >
+        <MediaOutlet />
+        <MediaCommunitySkin />
+      </MediaPlayer>
 
       {/* Custom Progress Bar Overlay (For transcoded live streams with Cinemeta hint) */}
       {showCustomTimeline && !showOverlay && (

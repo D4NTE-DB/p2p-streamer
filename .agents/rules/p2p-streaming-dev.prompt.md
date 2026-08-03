@@ -14,7 +14,7 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 
 ## Tech Stack
 
-- **Frontend:** React (Vite + TypeScript + React Compiler), Tailwind CSS, Lucide React icons
+- **Frontend:** React (Vite + TypeScript + React Compiler), Tailwind CSS, Lucide React icons, Vidstack (Media Player)
 - **Backend (local proxy):** Node.js, `webtorrent` (or `torrent-stream`), Node HTTP standard library
 - **Database/Auth:** Firebase (Auth, Firestore), Stripe (future Pro tiers)
 - **External integrations:** VLC Media Player (launched via native OS commands), Torrentio API, Stremio Cinemeta API
@@ -33,7 +33,7 @@ The frontend codebase is organized to separate concerns, using React Router and 
 *   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
 *   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation.
 *   **`src/pages/`**: Dedicated route components (e.g., `Dashboard.tsx`, `StreamOptions.tsx`, `Login.tsx`).
-*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (handling HLS streams, loading reveals, Telemetry HUD overlay on hover, and Cinemeta duration hints), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx`.
+*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (powered by Vidstack, handling loading reveals, Telemetry HUD overlay on hover, Cinemeta duration hints, and playback analytics via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx`.
 
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK (Auth and Firestore) and validates the necessary environment variables.
 

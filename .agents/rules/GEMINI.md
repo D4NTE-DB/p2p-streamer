@@ -54,7 +54,7 @@ The application follows a modern, scalable React architecture using React Router
     *   `StreamOptions.tsx`: The streaming page that scrapes Torrentio via the backend proxy, fetches Cinemeta movie runtime for timeline hints, filters by size and language, and toggles between poster preview and full-width video player mode with animated layout shift.
     *   `Configuration.tsx`: User settings page for quality and torrent size limits.
     *   `Login.tsx` & `Register.tsx`: Firebase Email/Password authentication.
-*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (with single-run blur progress reveal, Telemetry HUD overlay on hover, custom Cinemeta duration bar, and HLS support), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx`.
+*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (powered by Vidstack, with single-run blur progress reveal, Telemetry HUD overlay on hover, custom Cinemeta duration bar, and analytics logging via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx`.
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK.
 *   **`src/constants.ts`**: Application-wide constants.
 *   **`src/types.ts`**: Shared TypeScript type definitions.
