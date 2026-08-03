@@ -24,17 +24,45 @@ process.on('unhandledRejection', (reason: any) => {
 const app = express();
 const port = 8888;
 
-// Create temp directory for HLS segments
+// Create temp directories for HLS & CMAF segments
 const HLS_TEMP_DIR = path.join(os.tmpdir(), 'p2p-streamer-hls');
-if (!fs.existsSync(HLS_TEMP_DIR)) {
-  fs.mkdirSync(HLS_TEMP_DIR, { recursive: true });
-}
+const CMAF_TEMP_DIR = path.join(os.tmpdir(), 'p2p-streamer-cmaf');
 
-// Serve static HLS segments
+[HLS_TEMP_DIR, CMAF_TEMP_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+// Serve static HLS & CMAF segments
 app.use('/hls', express.static(HLS_TEMP_DIR));
+app.use('/cmaf', express.static(CMAF_TEMP_DIR));
 
 // Use CORS to allow requests from the React frontend (e.g., http://localhost:5173)
 app.use(cors());
+
+// Torrentio Proxy Endpoint to bypass browser 403 blocks
+app.get('/api/torrentio/stream/:type/:imdbId.json', async (req, res) => {
+  const { type, imdbId } = req.params;
+  const targetUrl = `https://torrentio.strem.fun/stream/${type}/${imdbId}.json`;
+  
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Stremio/4.4.168 (desktop)',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Torrentio returned HTTP ${response.status}` });
+    }
+
+    const data = await response.json();
+    return res.json(data);
+  } catch (err: any) {
+    console.error('[Server] Torrentio proxy error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch from Torrentio proxy' });
+  }
+});
 
 const client = new WebTorrent();
 
@@ -53,8 +81,9 @@ const PUBLIC_TRACKERS = [
   'udp://open.demonii.com:1337/announce'
 ];
 
-// Map of active HLS transcode ffmpeg processes by infoHash
+// Map of active transcode ffmpeg processes by infoHash
 const activeHlsProcesses = new Map<string, any>();
+const activeCmafProcesses = new Map<string, any>();
 
 function getMimeType(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
@@ -102,6 +131,47 @@ function isClientAbortError(err: any): boolean {
   );
 }
 
+function isNativeWebVideo(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  return ext === '.mp4' || ext === '.webm' || ext === '.ogv' || ext === '.m4v';
+}
+
+function serveTranscodedStream(file: any, req: express.Request, res: express.Response) {
+  console.log(`[Server] On-the-fly 1:1 Transcoding for non-web file: ${file.name}`);
+
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  const inputStream = file.createReadStream();
+  const command = ffmpeg(inputStream)
+    .videoCodec('libx264')
+    .audioCodec('aac')
+    .outputOptions([
+      '-preset ultrafast',
+      '-tune zerolatency',
+      '-movflags frag_keyframe+empty_moov+default_base_moof',
+      '-map', '0:v:0',
+      '-map', '0:a:0?'
+    ])
+    .format('mp4');
+
+  command.on('error', (err: any) => {
+    if (!isClientAbortError(err)) {
+      console.error(`[Server] Transcode error for ${file.name}:`, err.message);
+    }
+  });
+
+  req.on('close', () => {
+    try {
+      command.kill('SIGKILL');
+    } catch {}
+    if (typeof inputStream.destroy === 'function') inputStream.destroy();
+  });
+
+  command.pipe(res, { end: true });
+}
+
 function serveStream(torrent: any, req: express.Request, res: express.Response) {
   // Find the largest file in the torrent (usually the main video)
   const file = torrent.files.reduce((a: any, b: any) => (a.length > b.length ? a : b));
@@ -114,9 +184,15 @@ function serveStream(torrent: any, req: express.Request, res: express.Response) 
   });
   file.select();
 
+  // If the file is not web compatible, transcode it on the fly
+  if (!isNativeWebVideo(file.name)) {
+    return serveTranscodedStream(file, req, res);
+  }
+
   res.setHeader('Content-Type', mimeType);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Content-Disposition', 'inline');
 
   const rangeHeader = req.headers.range;
 
@@ -308,6 +384,145 @@ app.get('/hls-stream/:infoHash/index.m3u8', async (req, res) => {
   } catch (err: any) {
     console.error(`[Server] HLS setup error:`, err.message);
     if (!res.headersSent) res.status(500).send('HLS setup error');
+  }
+});
+
+// Universal CMAF Stream Endpoint (DASH .mpd + HLS .m3u8 using shared .m4s segments)
+app.get('/cmaf-stream/:infoHash', async (req, res) => {
+  const { infoHash } = req.params;
+  const formatType = req.query.format === 'hls' ? 'hls' : 'dash';
+
+  if (!infoHash) {
+    return res.status(400).send('Missing infoHash');
+  }
+
+  console.log(`[Server] Received CMAF stream request (${formatType.toUpperCase()}) for infoHash: ${infoHash}`);
+
+  try {
+    let torrent = await client.get(infoHash);
+    if (!torrent) {
+      const torrentId = getMagnetUri(infoHash);
+      torrent = client.add(torrentId);
+    }
+
+    const startCmafTranscode = () => {
+      const targetDir = path.join(CMAF_TEMP_DIR, infoHash);
+      const mpdFile = path.join(targetDir, 'manifest.mpd');
+      const hlsFile = path.join(targetDir, 'master.m3u8');
+      const initSegPattern = path.join(targetDir, 'init-stream$RepresentationID$.m4s');
+      const mediaSegPattern = path.join(targetDir, 'chunk-stream$RepresentationID$-$Number%05d$.m4s');
+
+      const redirectPath = formatType === 'hls' ? `/cmaf/${infoHash}/master.m3u8` : `/cmaf/${infoHash}/manifest.mpd`;
+      const targetFileToCheck = formatType === 'hls' ? hlsFile : mpdFile;
+
+      if (fs.existsSync(targetFileToCheck) && fs.statSync(targetFileToCheck).size > 0) {
+        return res.redirect(redirectPath);
+      }
+
+      if (activeCmafProcesses.has(infoHash)) {
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (fs.existsSync(targetFileToCheck) && fs.statSync(targetFileToCheck).size > 0) {
+            clearInterval(checkInterval);
+            if (!res.headersSent) res.redirect(redirectPath);
+          } else if (attempts > 30) {
+            clearInterval(checkInterval);
+            if (!res.headersSent) res.status(500).send('CMAF initialization timeout');
+          }
+        }, 400);
+        return;
+      }
+
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const file = torrent.files.reduce((a: any, b: any) => (a.length > b.length ? a : b));
+      console.log(`[Server] CMAF Transcoding started for: ${file.name}`);
+
+      torrent.files.forEach((f: any) => {
+        if (f !== file) f.deselect();
+      });
+      file.select();
+
+      const stream = file.createReadStream() as any;
+
+      // FFmpeg CMAF Muxer Configuration (ABR Multi-Quality 1080p/720p/480p)
+      const command = ffmpeg(stream)
+        .complexFilter([
+          '[0:v]split=3[v1][v2][v3]',
+          '[v1]scale=-2:1080[v1out]',
+          '[v2]scale=-2:720[v2out]',
+          '[v3]scale=-2:480[v3out]'
+        ])
+        .format('dash')
+        .outputOptions([
+          '-map', '[v1out]',
+          '-map', '[v2out]',
+          '-map', '[v3out]',
+          '-map', '0:a:0',
+          '-c:v', 'libx264',
+          '-c:a', 'aac',
+          '-b:v:0', '3000k',
+          '-b:v:1', '1500k',
+          '-b:v:2', '800k',
+          '-preset', 'ultrafast',
+          '-g', '48',
+          '-sc_threshold', '0',
+          '-seg_duration', '4',
+          '-use_timeline', '1',
+          '-use_template', '1',
+          '-hls_playlist', '1',
+          '-adaptation_sets', 'id=0,streams=0,1,2 id=1,streams=3',
+          '-init_seg_name', 'init-stream$RepresentationID$.m4s',
+          '-media_seg_name', 'chunk-stream$RepresentationID$-$Number%05d$.m4s'
+        ])
+        .output(mpdFile)
+        .on('stderr', (stderrLine) => {
+          console.log('[FFmpeg]', stderrLine);
+        })
+        .on('start', () => {
+          let attempts = 0;
+          const checkInterval = setInterval(() => {
+            attempts++;
+            if (fs.existsSync(targetFileToCheck) && fs.statSync(targetFileToCheck).size > 0) {
+              clearInterval(checkInterval);
+              if (!res.headersSent) {
+                res.redirect(redirectPath);
+              }
+            } else if (attempts > 30) {
+              clearInterval(checkInterval);
+              if (!res.headersSent) res.status(500).send('CMAF initialization timeout');
+            }
+          }, 400);
+        })
+        .on('error', (err) => {
+          if (!isClientAbortError(err)) {
+            console.error(`[Server] CMAF error for ${file.name}:`, err.message);
+          }
+          activeCmafProcesses.delete(infoHash);
+          if (!res.headersSent) res.status(500).send('CMAF Transcoding error');
+        })
+        .on('end', () => {
+          console.log(`[Server] CMAF Transcode complete for infoHash: ${infoHash}`);
+          activeCmafProcesses.delete(infoHash);
+        });
+
+      activeCmafProcesses.set(infoHash, command);
+      command.run();
+    };
+
+    if (torrent.ready) {
+      startCmafTranscode();
+    } else {
+      torrent.once('ready', startCmafTranscode);
+      torrent.once('error', (err: Error) => {
+        console.error(`[Server] Torrent error during CMAF transcode:`, err.message);
+        if (!res.headersSent) res.status(500).send('Torrent error');
+      });
+    }
+  } catch (err: any) {
+    console.error(`[Server] CMAF setup error:`, err.message);
+    if (!res.headersSent) res.status(500).send('CMAF setup error');
   }
 });
 

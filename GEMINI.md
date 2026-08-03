@@ -34,36 +34,30 @@ This `GEMINI.md` file provides essential instructions and context for the `p2p-s
 
 Guidelines for contributing to this project are to be defined by project maintainers.
 
-## Codebase Structure & Refactoring
+## Codebase Structure & Architecture
 
-The main application logic resides in `src/App.tsx`. To improve readability and maintainability, the original monolithic `App` component has been refactored. The application now follows a standard React project structure, separating concerns into different files and directories.
+The application follows a modern, scalable React architecture using React Router for navigation and Redux Toolkit for global state management.
 
 ### Codebase Breakdown
 
-*   **`src/App.tsx`**: This is the primary container component. It is responsible for:
-    *   **State Management**: All application state (user, library, search results, UI state) is managed here using `useState`.
-    *   **Side Effects**: All side effects, such as Firebase authentication, Firestore subscriptions, and API calls, are handled here using `useEffect`.
-    *   **Logic & Handlers**: All event handlers (`searchTorrentio`, `saveToLibrary`, etc.) are defined here.
-    *   **Composition**: It renders the overall application layout by importing and composing the presentational components, passing the necessary state and handlers to them as props.
-
-*   **`src/components/`**: This directory contains all the presentational (UI) React components. Each component is in its own file, making them reusable and easy to manage.
-    *   `FullScreenLoader.tsx`: A simple loading spinner shown while the user is being authenticated.
-    *   `Header.tsx`: The main application header, showing the title and user information.
-    *   `InitErrorScreen.tsx`: Displays a fatal error if Firebase fails to initialize.
-    *   `LibraryItemCard.tsx`: Renders a single item from the user's library with a button to remove it. It is memoized with `React.memo`.
-    *   `LibraryPanel.tsx`: The sidebar component that displays the user's saved "Cloud Library".
-    *   `SearchPanel.tsx`: Contains the search input form and quality filter checkboxes.
-    *   `StreamItem.tsx`: Renders a single torrent stream result with its details and action buttons. It is memoized with `React.memo`.
-    *   `SuggestionPanel.tsx`: Displays the movie poster for the current search result.
-    *   `SystemStatusPanel.tsx`: A static informational panel about the conceptual local proxy.
-
-*   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK, including Auth and Firestore instances. It also includes validation for the necessary environment variables.
-
-*   **`src/constants.ts`**: A central place for application-wide constants, such as API endpoints, quality categories, and cache settings.
-
-*   **`src/types.ts`**: Contains all shared TypeScript type definitions and interfaces (e.g., `StreamMetadata`, `LibraryItem`), ensuring type safety across the application.
-
-This refactoring separates the application's concerns: the `App` component is the "brain" that holds the state and logic, while the components in the `src/components` directory are "dumb" renderers. This makes the code easier to understand, debug, and maintain.
+*   **`src/App.tsx`**: The Root application wrapper. It handles the Redux `<Provider>`, React Router `<BrowserRouter>`, and sets up global listeners (like Firebase Auth and Firestore `onSnapshot`).
+*   **`src/store/`**: Contains the Redux Toolkit slices and thunks:
+    *   `authSlice.ts`: Manages user authentication state.
+    *   `librarySlice.ts`: Manages the user's saved items (Cloud Library).
+    *   `configSlice.ts`: Manages user preferences (quality filters, max torrent size filter, audio language preference, and sidebar state).
+    *   `playerSlice.ts`: Manages global video player state (`playingUrl`, `playingInfoHash`, `runtimeSeconds`).
+    *   `libraryThunks.ts`: Encapsulates async Firestore CRUD (`saveStreamToLibrary`, `removeStreamFromLibrary`) and playback initialization.
+*   **`src/layouts/`**:
+    *   `MainLayout.tsx`: The primary wrapper containing the responsive Side Navigation and Header with global movie search. Renders nested routes via `<Outlet />`.
+*   **`src/pages/`**: Dedicated page components:
+    *   `Dashboard.tsx`: The home page showing trending movie posters.
+    *   `StreamOptions.tsx`: The streaming page that scrapes Torrentio via the backend proxy, fetches Cinemeta movie runtime for timeline hints, filters by size and language, and toggles between poster preview and full-width video player mode with animated layout shift.
+    *   `Configuration.tsx`: User settings page for quality and torrent size limits.
+    *   `Login.tsx` & `Register.tsx`: Firebase Email/Password authentication.
+*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (with single-run blur progress reveal, Telemetry HUD overlay on hover, custom Cinemeta duration bar, and HLS support), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx`.
+*   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK.
+*   **`src/constants.ts`**: Application-wide constants.
+*   **`src/types.ts`**: Shared TypeScript type definitions.
 
 ## Further Documentation
 

@@ -10,6 +10,7 @@ export interface StreamMetadata {
   tracker: string;
   cleanTitle: string;
   rawTitle: string;
+  languages: string[];
 }
 
 export interface CategorizedStreams {
@@ -41,4 +42,13 @@ export interface CachedSearch {
   movieTitle: string;
   streams: CategorizedStreams;
   posterUrl: string;
+}
+
+export interface CinemetaMovie {
+  id: string; // e.g. tt1234567
+  name: string;
+  poster: string;
+  year?: string;
+  type?: string;
+  runtime?: string;
 }

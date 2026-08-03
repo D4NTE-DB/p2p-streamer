@@ -27,17 +27,19 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 
 ## Codebase Structure
 
-The frontend codebase is organized to separate concerns, making it modular and maintainable.
+The frontend codebase is organized to separate concerns, using React Router and Redux Toolkit.
 
-*   **`src/App.tsx`**: The primary container component. It manages all application state (`useState`), handles side effects like API calls and Firebase subscriptions (`useEffect`), defines all event handlers, and composes the UI by passing state and props to presentational components.
-
-*   **`src/components/`**: This directory contains all presentational (UI) React components. Each component is in its own file. Key components include `Header.tsx`, `SearchPanel.tsx`, `StreamItem.tsx`, `LibraryPanel.tsx`, and `SuggestionPanel.tsx`.
+*   **`src/App.tsx`**: The Root application wrapper initializing Redux `<Provider>` and React Router `<BrowserRouter>`.
+*   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
+*   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation.
+*   **`src/pages/`**: Dedicated route components (e.g., `Dashboard.tsx`, `StreamOptions.tsx`, `Login.tsx`).
+*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (handling HLS streams, loading reveals, Telemetry HUD overlay on hover, and Cinemeta duration hints), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx`.
 
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK (Auth and Firestore) and validates the necessary environment variables.
 
 *   **`src/constants.ts`**: A central file for application-wide constants like API endpoints and cache settings.
 
-*   **`src/types.ts`**: Contains all shared TypeScript type definitions and interfaces (e.g., `StreamMetadata`, `LibraryItem`), ensuring type safety.
+*   **`src/types.ts`**: Contains all shared TypeScript type definitions and interfaces (e.g., `StreamMetadata`, `LibraryItem`, `CinemetaMovie`), ensuring type safety.
 
 ## Critical mechanisms & business logic
 
@@ -48,12 +50,12 @@ Apply these rules to any code you generate for this project:
 - **Two-tier caching:**
   - *Frontend:* in-memory LRU cache, capped at 20 searches, for Torrentio/Cinemeta API calls (prevents rate-limiting).
   - *Backend:* a RAM ring buffer (50–100MB) for immediate playback, plus a disk cache (2–5GB cap, LRU eviction) to limit storage wear.
-- **Torrentio metadata parsing.** Seeders/size/trackers are embedded in result titles as emoji markers (👤 seeders, 💾 size, ⚙️ trackers) — extract with regex. Always resolve free-text searches to an IMDB ID (e.g. `tt1630029`) via the Cinemeta API before querying Torrentio.
+- **Torrentio metadata parsing.** Seeders, size, trackers, and languages are embedded in result titles — extract with regex (e.g. 👤 seeders, 💾 size, language flags like 🇲🇽 MX, 🇪🇸 ES, 🇬🇧 EN). Always resolve free-text searches to an IMDB ID (e.g. `tt1630029`) via the Cinemeta API before querying Torrentio.
 
 ## Coding standards
 
 - **TypeScript strictness:** precise interfaces for API responses (`TorrentioStream`) and Firestore documents (`LibraryItem`); never use `any`; handle missing/inconsistent Torrentio fields gracefully. All types are centralized in `src/types.ts`.
-- **Firebase Interaction:** All Firestore operations (CRUD for the `library` collection) are performed in `App.tsx` and are user-specific, scoped to `users/{userId}/library`. Authentication is handled via Firebase Anonymous Auth.
+- **Firebase Interaction:** All Firestore operations (CRUD for the `library` collection) are user-specific, scoped to `users/{userId}/library`. Authentication is handled via Firebase Email/Password Authentication.
 - **React Compiler compatibility:** don't hand-write `useMemo`/`useCallback` unless a third-party library specifically requires it — assume the compiler handles memoization.
 - **Error handling:** wrap every API call and P2P socket event in `try/catch` or `.on('error')`. The UI must always reflect network state (loading, buffering, error) and must never crash silently.
 - **List rendering:** key stream lists on `` `${stream.infoHash}-${idx}` `` (index appended), since Torrentio frequently returns duplicate info hashes.
