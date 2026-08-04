@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { MediaPlayer, MediaProvider, useMediaState, type MediaPlayerInstance } from '@vidstack/react';
+import { MediaPlayer, MediaProvider, useMediaState, useMediaRemote, type MediaPlayerInstance } from '@vidstack/react';
 import { DefaultVideoLayout, defaultLayoutIcons } from '@vidstack/react/player/layouts/default';
 import { X, AlertTriangle, Activity, Wifi, ArrowDown, ArrowUp, Server } from 'lucide-react';
 import { logPlaybackEvent } from '../utils/playerAnalytics';
@@ -61,6 +61,7 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
   onClose,
 }) => {
   // Read state directly from Vidstack Media Context (zero manual event listeners or parent re-renders)
+  const remote = useMediaRemote();
   const currentTime = useMediaState('currentTime');
   const duration = useMediaState('duration');
   const canPlay = useMediaState('canPlay');
@@ -81,20 +82,29 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
   const telemetry = globalStats?.torrents?.find((t) => t.infoHash === infoHash) || 
                    (globalStats?.torrents?.length ? globalStats.torrents[globalStats.torrents.length - 1] : null);
 
-  // Fake progress that completes exactly when ready
+  const proxyDuration = telemetry?.durationSeconds ?? null;
+
+  // Override Vidstack's internal duration state if native stream reports Infinity or 0
   useEffect(() => {
-    if (isLoading) {
-      const interval = setInterval(() => {
-        setRevealProgress(prev => {
-          const remaining = 90 - prev;
-          return Math.min(90, prev + Math.max(0.5, remaining * 0.1));
-        });
-      }, 150);
-      return () => clearInterval(interval);
-    } else {
+    if (
+      remote &&
+      proxyDuration &&
+      proxyDuration > 0 &&
+      (!isFinite(duration) || duration === 0)
+    ) {
+      remote.changeDuration(proxyDuration);
+    }
+  }, [remote, proxyDuration, duration]);
+
+  // Real progress from telemetry
+  useEffect(() => {
+    if (isLoading && telemetry?.progress) {
+      const realProgress = parseFloat(telemetry.progress);
+      setRevealProgress(Math.min(90, realProgress));
+    } else if (!isLoading) {
       setRevealProgress(100);
     }
-  }, [isLoading]);
+  }, [isLoading, telemetry?.progress]);
 
   // Smooth overlay fade-out when loading and reveal complete
   useEffect(() => {
@@ -241,6 +251,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     });
   }, [src, infoHash, poster]);
 
+  useEffect(() => {
+    if (!playerRef.current) return;
+    const player = playerRef.current;
+    
+    const unsub = player.subscribe(({ audioTracks, textTracks }) => {
+      if (audioLanguage && audioLanguage !== 'all' && audioTracks.length > 0) {
+        const track = audioTracks.find(t => t.language?.toLowerCase().includes(audioLanguage));
+        if (track) track.selected = true;
+      }
+      if (requireSubtitles && textTracks.length > 0) {
+        const textTrack = textTracks.find(t => t.kind === 'subtitles' || t.kind === 'captions');
+        if (textTrack) textTrack.mode = 'showing';
+      }
+    });
+    
+    return unsub;
+  }, [audioLanguage, requireSubtitles]);
+
   return (
     <div className="w-full bg-black aspect-video flex flex-col relative group rounded-xl overflow-hidden shadow-2xl border border-gray-800">
       {/* Vidstack Media Player Container */}
@@ -252,20 +280,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         autoplay
         playsInline
         load="eager"
-        onCanPlay={() => {
-          if (!playerRef.current) return;
-          const player = playerRef.current;
-          
-          if (audioLanguage && audioLanguage !== 'all') {
-            const track = player.audioTracks.toArray().find(t => t.language?.toLowerCase().includes(audioLanguage));
-            if (track) track.selected = true;
-          }
-          
-          if (requireSubtitles) {
-            const textTrack = player.textTracks.toArray().find(t => t.kind === 'subtitles' || t.kind === 'captions');
-            if (textTrack) textTrack.mode = 'showing';
-          }
-        }}
         onPlaying={() => {
           logPlaybackEvent({
             type: 'play',
@@ -273,20 +287,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             timestamp: Date.now(),
           });
         }}
-        onPause={(e: Record<string, any>) => {
+        onPause={(e) => {
           logPlaybackEvent({
             type: 'pause',
             infoHash,
-            currentTime: e?.detail?.currentTime ?? e?.currentTime,
-            duration: e?.detail?.duration ?? e?.duration,
+            currentTime: playerRef.current?.currentTime,
+            duration: playerRef.current?.duration,
             timestamp: Date.now(),
           });
         }}
-        onEnded={(e: Record<string, any>) => {
+        onEnded={(e) => {
           logPlaybackEvent({
             type: 'ended',
             infoHash,
-            duration: e?.detail?.duration ?? e?.duration,
+            duration: playerRef.current?.duration,
             timestamp: Date.now(),
           });
         }}
@@ -297,7 +311,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             timestamp: Date.now(),
           });
         }}
-        onError={(e: Record<string, any>) => {
+        onError={(e) => {
           logPlaybackEvent({
             type: 'error',
             infoHash,

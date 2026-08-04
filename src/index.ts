@@ -61,6 +61,69 @@ client.on('error', (err: string | Error) => {
   console.error('[Server] WebTorrent client error:', msg);
 });
 
+// Resource limits for Torrents
+const torrentLastAccessed = new Map<string, number>();
+const MAX_ACTIVE_TORRENTS = 3;
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+function evictIdleTorrents() {
+  const now = Date.now();
+  for (const t of client.torrents) {
+    const lastAccess = torrentLastAccessed.get(t.infoHash) || 0;
+    if (now - lastAccess > IDLE_TIMEOUT_MS) {
+      console.log(`[Server] Evicting idle torrent: ${t.infoHash}`);
+      client.remove(t.infoHash, { destroyStore: true });
+      durationCache.delete(t.infoHash);
+      torrentLastAccessed.delete(t.infoHash);
+    }
+  }
+
+  // If we are at the limit, evict the oldest
+  if (client.torrents.length >= MAX_ACTIVE_TORRENTS) {
+    let oldestHash: string | null = null;
+    let oldestTime = now;
+    for (const t of client.torrents) {
+      const time = torrentLastAccessed.get(t.infoHash) || 0;
+      if (time < oldestTime) {
+        oldestTime = time;
+        oldestHash = t.infoHash;
+      }
+    }
+    if (oldestHash) {
+      console.log(`[Server] Evicting oldest torrent to respect limit: ${oldestHash}`);
+      client.remove(oldestHash, { destroyStore: true });
+      durationCache.delete(oldestHash);
+      torrentLastAccessed.delete(oldestHash);
+    }
+  }
+}
+
+function attachTorrentLogging(torrent: any) {
+  if (torrent.__loggingAttached) return;
+  torrent.__loggingAttached = true;
+  
+  torrent.on('noPeers', (announceType: string) => {
+    console.warn(`[Server] No peers found for ${torrent.infoHash} via ${announceType}`);
+  });
+
+  torrent.on('warning', (err: any) => {
+    console.warn(`[Server] Torrent warning for ${torrent.infoHash}:`, err?.message || err);
+  });
+}
+
+function prioritizePieces(torrent: any) {
+  if (torrent.__prioritized) return;
+  torrent.__prioritized = true;
+  
+  const totalPieces = torrent.pieces.length;
+  if (totalPieces > 0) {
+    // First 5 pieces for instant playback start
+    torrent.critical(0, Math.min(4, totalPieces - 1));
+    // Last 5 pieces for MKV Cues / MP4 moov at file end
+    torrent.critical(Math.max(0, totalPieces - 5), totalPieces - 1);
+  }
+}
+
 // High-availability public BitTorrent trackers to accelerate peer discovery
 const PUBLIC_TRACKERS = [
   'udp://tracker.opentrackr.org:1337/announce',
@@ -124,40 +187,42 @@ function isNativeWebVideo(filename: string): boolean {
   return ext === '.mp4' || ext === '.webm' || ext === '.ogv' || ext === '.m4v';
 }
 
-function serveTranscodedStream(file: any, req: express.Request, res: express.Response) {
-  console.log(`[Server] On-the-fly 1:1 Transcoding for non-web file: ${file.name}`);
+const durationCache = new Map<string, number>();
+const durationPromises = new Map<string, Promise<number>>();
 
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function getOrProbeDuration(file: any, infoHash: string): Promise<number> {
+  if (durationCache.has(infoHash)) return Promise.resolve(durationCache.get(infoHash)!);
+  if (durationPromises.has(infoHash)) return durationPromises.get(infoHash)!;
 
-  const inputStream = file.createReadStream();
-  const command = ffmpeg(inputStream)
-    .videoCodec('libx264')
-    .audioCodec('aac')
-    .outputOptions([
-      '-preset ultrafast',
-      '-tune zerolatency',
-      '-movflags frag_keyframe+empty_moov+default_base_moof',
-      '-map', '0:v:0',
-      '-map', '0:a:0?'
-    ])
-    .format('mp4');
-
-  command.on('error', (err: any) => {
-    if (!isClientAbortError(err)) {
-      console.error(`[Server] Transcode error for ${file.name}:`, err.message);
+  const promise = new Promise<number>((resolve, reject) => {
+    try {
+      const inputStream = file.createReadStream();
+      ffmpeg(inputStream).ffprobe((err: any, metadata: any) => {
+        if (typeof inputStream.destroy === 'function') inputStream.destroy();
+        if (err) {
+          console.error(`[Server] ffprobe duration check failed for ${file.name}:`, err.message);
+          return reject(err);
+        }
+        const duration = metadata?.format?.duration;
+        if (duration && !isNaN(duration) && isFinite(duration) && duration > 0) {
+          const parsedDuration = parseFloat(duration);
+          durationCache.set(infoHash, parsedDuration);
+          console.log(`[Server] Duration sniffed for ${infoHash}: ${parsedDuration}s`);
+          resolve(parsedDuration);
+        } else {
+          reject(new Error('Invalid duration from ffprobe'));
+        }
+      });
+    } catch (err: any) {
+      console.error(`[Server] Error probing duration for ${file.name}:`, err.message);
+      reject(err);
     }
   });
 
-  req.on('close', () => {
-    try {
-      command.kill('SIGKILL');
-    } catch {}
-    if (typeof inputStream.destroy === 'function') inputStream.destroy();
-  });
+  durationPromises.set(infoHash, promise);
+  promise.finally(() => durationPromises.delete(infoHash)).catch(() => {});
 
-  command.pipe(res, { end: true });
+  return promise;
 }
 
 function serveStream(torrent: any, req: express.Request, res: express.Response) {
@@ -172,10 +237,8 @@ function serveStream(torrent: any, req: express.Request, res: express.Response) 
   });
   file.select();
 
-  // If the file is not web compatible, transcode it on the fly
-  if (!isNativeWebVideo(file.name)) {
-    return serveTranscodedStream(file, req, res);
-  }
+  // Trigger background duration sniffing via ffprobe
+  getOrProbeDuration(file, torrent.infoHash).catch(() => {});
 
   res.setHeader('Content-Type', mimeType);
   res.setHeader('Accept-Ranges', 'bytes');
@@ -244,15 +307,37 @@ app.get('/stream/:infoHash', async (req, res) => {
   try {
     let torrent = await client.get(infoHash);
     if (!torrent) {
+      evictIdleTorrents();
       const torrentId = getMagnetUri(infoHash);
-      torrent = client.add(torrentId);
+      torrent = client.add(torrentId, { strategy: 'sequential' });
     }
+    
+    torrentLastAccessed.set(infoHash, Date.now());
+    attachTorrentLogging(torrent);
+
+    const READY_TIMEOUT_MS = 30000;
+    const readyTimeout = setTimeout(() => {
+      if (!torrent.ready) {
+        console.warn(`[Server] Discovery timeout for ${infoHash}`);
+        client.remove(infoHash, { destroyStore: true });
+        durationCache.delete(infoHash);
+        torrentLastAccessed.delete(infoHash);
+        if (!res.headersSent) res.status(504).send('Torrent discovery timed out');
+      }
+    }, READY_TIMEOUT_MS);
+
+    const onReady = () => {
+      clearTimeout(readyTimeout);
+      prioritizePieces(torrent);
+      serveStream(torrent, req, res);
+    };
 
     if (torrent.ready) {
-      serveStream(torrent, req, res);
+      onReady();
     } else {
-      torrent.once('ready', () => serveStream(torrent, req, res));
+      torrent.once('ready', onReady);
       torrent.once('error', (err: Error) => {
+        clearTimeout(readyTimeout);
         console.error(`[Server] Torrent error for infoHash ${infoHash}:`, err.message);
         if (!res.headersSent) res.status(500).send('Torrent error');
       });
@@ -264,74 +349,143 @@ app.get('/stream/:infoHash', async (req, res) => {
 });
 
 
-app.get('/stream-transcoded/:infoHash', async (req, res) => {
+app.get('/hls-stream/:infoHash/index.m3u8', async (req, res) => {
   const { infoHash } = req.params;
 
   if (!infoHash) {
     return res.status(400).send('Missing infoHash');
   }
 
-  console.log(`[Server] Received TRANSCODE stream request for infoHash: ${infoHash}`);
+  console.log(`[Server] Generating HLS playlist for infoHash: ${infoHash}`);
 
   try {
     let torrent = await client.get(infoHash);
     if (!torrent) {
+      evictIdleTorrents();
       const torrentId = getMagnetUri(infoHash);
-      torrent = client.add(torrentId);
+      torrent = client.add(torrentId, { strategy: 'sequential' });
     }
 
-    const startTranscode = () => {
-      const file = torrent.files.reduce((a: any, b: any) => (a.length > b.length ? a : b));
-      console.log(`[Server] Transcoding file: ${file.name}`);
+    torrentLastAccessed.set(infoHash, Date.now());
+    attachTorrentLogging(torrent);
 
+    const READY_TIMEOUT_MS = 30000;
+    const readyTimeout = setTimeout(() => {
+      if (!torrent.ready) {
+        console.warn(`[Server] Discovery timeout for ${infoHash} (HLS playlist)`);
+        client.remove(infoHash, { destroyStore: true });
+        durationCache.delete(infoHash);
+        torrentLastAccessed.delete(infoHash);
+        if (!res.headersSent) res.status(504).send('Torrent discovery timed out');
+      }
+    }, READY_TIMEOUT_MS);
+
+    const generatePlaylist = async () => {
+      clearTimeout(readyTimeout);
+      prioritizePieces(torrent);
+
+      const file = torrent.files.reduce((a: any, b: any) => (a.length > b.length ? a : b));
       torrent.files.forEach((f: any) => {
         if (f !== file) f.deselect();
       });
       file.select();
 
-      res.setHeader('Content-Type', 'video/mp4');
-      res.setHeader('Connection', 'keep-alive');
-
-      const stream = file.createReadStream() as any;
-
-      const command = ffmpeg(stream)
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        .format('mp4')
-        .outputOptions([
-          '-movflags frag_keyframe+empty_moov',
-          '-preset ultrafast',
-          '-crf 28',
-          '-tune zerolatency'
-        ])
-        .on('error', (err) => {
-          if (!isClientAbortError(err)) {
-            console.error(`[Server] Transcoding error for ${file.name}:`, err.message);
-          }
-          if (!res.headersSent) res.status(500).send('Transcoding error');
-        });
-
-      command.pipe(res, { end: true });
-
-      req.on('close', () => {
-        if (typeof stream.destroy === 'function') stream.destroy();
-        command.kill('SIGKILL');
-      });
+      try {
+        const duration = await getOrProbeDuration(file, infoHash);
+        
+        const segmentLength = 10;
+        const numSegments = Math.ceil(duration / segmentLength);
+        
+        let playlist = `#EXTM3U\n`;
+        playlist += `#EXT-X-VERSION:3\n`;
+        playlist += `#EXT-X-TARGETDURATION:${segmentLength}\n`;
+        playlist += `#EXT-X-MEDIA-SEQUENCE:0\n`;
+        playlist += `#EXT-X-PLAYLIST-TYPE:VOD\n`;
+        
+        for (let i = 0; i < numSegments; i++) {
+          const isLast = i === numSegments - 1;
+          const currentDuration = isLast ? (duration - (i * segmentLength)).toFixed(3) : segmentLength.toFixed(3);
+          playlist += `#EXTINF:${currentDuration},\n`;
+          playlist += `${i}.ts\n`;
+        }
+        
+        playlist += `#EXT-X-ENDLIST\n`;
+        
+        res.setHeader('Content-Type', 'application/x-mpegurl');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.send(playlist);
+      } catch (err) {
+        console.error(`[Server] Failed to generate playlist, couldn't get duration for ${infoHash}:`, err);
+        if (!res.headersSent) res.status(500).send('Could not determine duration for HLS');
+      }
     };
 
     if (torrent.ready) {
-      startTranscode();
+      generatePlaylist();
     } else {
-      torrent.once('ready', startTranscode);
+      torrent.once('ready', generatePlaylist);
       torrent.once('error', (err: Error) => {
-        console.error(`[Server] Torrent error during transcode for infoHash ${infoHash}:`, err.message);
+        clearTimeout(readyTimeout);
+        console.error(`[Server] Torrent error during HLS playlist for infoHash ${infoHash}:`, err.message);
         if (!res.headersSent) res.status(500).send('Torrent error');
       });
     }
   } catch (err: any) {
-    console.error(`[Server] Transcode setup error:`, err.message);
-    if (!res.headersSent) res.status(500).send('Transcode setup error');
+    console.error(`[Server] HLS playlist setup error:`, err.message);
+    if (!res.headersSent) res.status(500).send('HLS playlist setup error');
   }
+});
+
+app.get('/hls-stream/:infoHash/:segment', (req, res) => {
+  const { infoHash, segment } = req.params;
+  
+  if (!segment.endsWith('.ts')) {
+    return res.status(400).send('Invalid segment format');
+  }
+
+  const segmentIndex = parseInt(segment.replace('.ts', ''), 10);
+  if (isNaN(segmentIndex)) {
+    return res.status(400).send('Invalid segment index');
+  }
+
+  const segmentLength = 10;
+  const startTime = segmentIndex * segmentLength;
+  
+  torrentLastAccessed.set(infoHash, Date.now());
+
+  console.log(`[Server] Transcoding segment ${segmentIndex} (start: ${startTime}s) for infoHash: ${infoHash}`);
+
+  res.setHeader('Content-Type', 'video/mp2t');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  const streamUrl = `http://localhost:${port}/stream/${infoHash}`;
+
+  const command = ffmpeg(streamUrl)
+    .setStartTime(startTime)
+    .setDuration(segmentLength)
+    .videoCodec('libx264')
+    .audioCodec('aac')
+    .outputOptions([
+      '-preset ultrafast',
+      '-crf 28',
+      '-tune zerolatency',
+      '-f mpegts'
+    ])
+    .on('error', (err) => {
+      if (!isClientAbortError(err)) {
+        console.error(`[Server] Transcoding error for segment ${segment}:`, err.message);
+      }
+      if (!res.headersSent) res.status(500).send('Transcoding error');
+    });
+
+  command.pipe(res, { end: true });
+
+  req.on('close', () => {
+    try {
+      command.kill('SIGKILL');
+    } catch {}
+  });
 });
 
 app.get('/play-vlc/:infoHash', (req, res) => {
@@ -374,7 +528,8 @@ app.get('/stats', (_req, res) => {
         totalSize: file && file.length ? formatBytes(file.length) : formatBytes(t.length),
         numPeers: t.numPeers || 0,
         fileName: file ? file.name : 'Unknown',
-        mimeType: file ? getMimeType(file.name) : 'video/mp4'
+        mimeType: file ? getMimeType(file.name) : 'video/mp4',
+        durationSeconds: durationCache.get(t.infoHash) ?? null
       };
     });
 

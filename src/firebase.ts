@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getAnalytics } from 'firebase/analytics';
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -9,6 +10,7 @@ export const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 const requiredFirebaseKeys = [
@@ -32,3 +34,4 @@ export const firebaseConfigValid = firebaseConfigValidationMessages.length === 0
 const app = firebaseConfigValid ? initializeApp(firebaseConfig) : undefined;
 export const auth = app ? getAuth(app) : undefined;
 export const db = app ? getFirestore(app) : undefined;
+export const analytics = app && typeof window !== 'undefined' ? getAnalytics(app) : undefined;

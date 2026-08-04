@@ -12,6 +12,7 @@ export interface TelemetryTorrent {
   numPeers: number;
   fileName: string;
   mimeType: string;
+  durationSeconds: number | null;
 }
 
 export interface TelemetryStats {

@@ -10,6 +10,7 @@ import { setLibrary } from './store/librarySlice';
 import { setTelemetryData, setTelemetryOffline, type TelemetryStats } from './store/telemetrySlice';
 import { auth, db } from './firebase';
 import type { LibraryItem } from './types';
+import { PROXY_BASE_URL } from './constants';
 
 // Layout & Pages
 import { MainLayout } from './layouts/MainLayout';
@@ -26,6 +27,7 @@ const appId = import.meta.env.VITE_APP_ID || 'p2p-streaming-app';
 const AppContent = () => {
   const dispatch = useDispatch();
   const { user, loading } = useSelector((state: RootState) => state.auth);
+  const playingUrl = useSelector((state: RootState) => state.player.playingUrl);
 
   useEffect(() => {
     dispatch(setAuthLoading(true));
@@ -53,9 +55,14 @@ const AppContent = () => {
 
   // Global Telemetry Polling
   useEffect(() => {
+    if (!playingUrl) {
+      dispatch(setTelemetryOffline());
+      return;
+    }
+
     let isMounted = true;
     const fetchTelemetry = () => {
-      fetch('http://localhost:8888/stats')
+      fetch(`${PROXY_BASE_URL}/stats`)
         .then((res) => {
           if (!res.ok) throw new Error('Proxy offline');
           return res.json();
@@ -74,7 +81,7 @@ const AppContent = () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [dispatch]);
+  }, [dispatch, playingUrl]);
 
   if (loading) {
     return <FullScreenLoader />;

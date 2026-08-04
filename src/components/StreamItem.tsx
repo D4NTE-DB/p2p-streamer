@@ -1,9 +1,11 @@
 import React from 'react';
 import { Heart, Users, HardDrive, Tv, ExternalLink, Subtitles } from 'lucide-react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import type { StreamMetadata } from '../types';
 import type { RootState, AppDispatch } from '../store';
 import { saveStreamToLibrary, removeStreamFromLibrary, launchStreamPlayback } from '../store/libraryThunks';
+import { PROXY_BASE_URL } from '../constants';
 
 interface StreamItemProps {
   stream: StreamMetadata;
@@ -22,6 +24,11 @@ const FLAG_MAP: Record<string, { flag: string; label: string; border: string }> 
 
 export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
   const dispatch = useDispatch<AppDispatch>();
+  const { imdbId } = useParams();
+  const [searchParams] = useSearchParams();
+  const title = searchParams.get('title') || 'Unknown Title';
+  const poster = searchParams.get('poster') || '';
+
   const isSaved = useSelector((state: RootState) =>
     state.library.items.some((item) => item.infoHash === stream.infoHash)
   );
@@ -37,11 +44,16 @@ export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
   };
 
   const handlePlayInBrowser = () => {
-    dispatch(launchStreamPlayback(stream.infoHash));
+    dispatch(launchStreamPlayback({ 
+      infoHash: stream.infoHash, 
+      title, 
+      poster, 
+      imdbId 
+    }));
   };
 
   const handlePlayInVLC = () => {
-    fetch(`http://localhost:8888/play-vlc/${stream.infoHash}`).catch(console.error);
+    fetch(`${PROXY_BASE_URL}/play-vlc/${stream.infoHash}`).catch(console.error);
   };
 
   return (

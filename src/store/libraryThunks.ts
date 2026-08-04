@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import type { StreamMetadata } from '../types';
 import type { RootState } from './index';
 import { setPlayingStream } from './playerSlice';
+import { PROXY_BASE_URL } from '../constants';
 
 const appId = import.meta.env.VITE_APP_ID || 'p2p-streaming-app';
 
@@ -39,13 +40,13 @@ export const removeStreamFromLibrary = createAsyncThunk(
 
 export const launchStreamPlayback = createAsyncThunk(
   'player/launchPlayback',
-  async (infoHash: string, { dispatch }) => {
-    let targetUrl = `http://localhost:8888/stream/${infoHash}`;
+  async ({ infoHash, title, poster, imdbId }: { infoHash: string, title?: string, poster?: string, imdbId?: string }, { dispatch }) => {
+    let targetUrl = `${PROXY_BASE_URL}/stream/${infoHash}`;
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch(`http://localhost:8888/stream/${infoHash}`, {
+      const res = await fetch(`${PROXY_BASE_URL}/stream/${infoHash}`, {
         method: 'HEAD',
         signal: controller.signal,
       });
@@ -58,12 +59,12 @@ export const launchStreamPlayback = createAsyncThunk(
         contentType.includes('avi') ||
         contentType.includes('mkv')
       ) {
-        targetUrl = `http://localhost:8888/hls-stream/${infoHash}/index.m3u8`;
+        targetUrl = `${PROXY_BASE_URL}/hls-stream/${infoHash}/index.m3u8`;
       }
     } catch {
       // Fallback to direct stream
     }
 
-    dispatch(setPlayingStream({ url: targetUrl, infoHash }));
+    dispatch(setPlayingStream({ url: targetUrl, infoHash, title, poster, imdbId }));
   }
 );
