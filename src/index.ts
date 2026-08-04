@@ -29,6 +29,11 @@ const port = 8888;
 // Use CORS to allow requests from the React frontend (e.g., http://localhost:5173)
 app.use(cors());
 
+// Root endpoint to verify server is running
+app.get('/', (req, res) => {
+  res.send('P2P Proxy Server is running gracefully!');
+});
+
 // Torrentio Proxy Endpoint to bypass browser 403 blocks
 app.get('/api/torrentio/stream/:type/:imdbId.json', async (req, res) => {
   const { type, imdbId } = req.params;

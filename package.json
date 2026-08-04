@@ -11,7 +11,8 @@
     "dev:server": "nodemon --watch \"src/index.ts\" --exec \"npx tsx src/index.ts\"",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.12.0",
