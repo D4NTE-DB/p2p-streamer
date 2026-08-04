@@ -4,13 +4,13 @@ import type { PayloadAction } from '@reduxjs/toolkit';
 interface PlayerState {
   playingUrl: string | null;
   playingInfoHash: string;
-  runtimeSeconds: number;
+  lastPlayedInfoHash: string | null;
 }
 
 const initialState: PlayerState = {
   playingUrl: null,
   playingInfoHash: '',
-  runtimeSeconds: 0,
+  lastPlayedInfoHash: null,
 };
 
 export const playerSlice = createSlice({
@@ -20,9 +20,7 @@ export const playerSlice = createSlice({
     setPlayingStream: (state, action: PayloadAction<{ url: string; infoHash: string }>) => {
       state.playingUrl = action.payload.url;
       state.playingInfoHash = action.payload.infoHash;
-    },
-    setRuntimeSeconds: (state, action: PayloadAction<number>) => {
-      state.runtimeSeconds = action.payload;
+      state.lastPlayedInfoHash = action.payload.infoHash;
     },
     closePlayer: (state) => {
       state.playingUrl = null;
@@ -31,5 +29,5 @@ export const playerSlice = createSlice({
   },
 });
 
-export const { setPlayingStream, setRuntimeSeconds, closePlayer } = playerSlice.actions;
+export const { setPlayingStream, closePlayer } = playerSlice.actions;
 export default playerSlice.reducer;

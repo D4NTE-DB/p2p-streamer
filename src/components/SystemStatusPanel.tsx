@@ -1,50 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Settings, Activity, Wifi, ShieldCheck, Film } from 'lucide-react';
-
-interface TelemetryStats {
-  status: string;
-  downloadSpeed: string;
-  uploadSpeed: string;
-  activeTorrentsCount: number;
-  torrents: Array<{
-    infoHash: string;
-    name: string;
-    progress: string;
-    downloadSpeed: string;
-    uploadSpeed: string;
-    downloaded: string;
-    totalSize: string;
-    numPeers: number;
-    fileName: string;
-    mimeType: string;
-  }>;
-}
+import { useSelector } from 'react-redux';
+import type { RootState } from '../store';
 
 export const SystemStatusPanel: React.FC = () => {
-  const [stats, setStats] = useState<TelemetryStats | null>(null);
-  const [isOnline, setIsOnline] = useState<boolean>(false);
+  const { stats, isOnline } = useSelector((state: RootState) => state.telemetry);
 
-  useEffect(() => {
-    const fetchStats = () => {
-      fetch('http://localhost:8888/stats')
-        .then(res => {
-          if (!res.ok) throw new Error('Proxy offline');
-          return res.json();
-        })
-        .then((data: TelemetryStats) => {
-          setStats(data);
-          setIsOnline(true);
-        })
-        .catch(() => {
-          setIsOnline(false);
-          setStats(null);
-        });
-    };
 
-    fetchStats();
-    const interval = setInterval(fetchStats, 2500);
-    return () => clearInterval(interval);
-  }, []);
 
   const activeTorrent = stats?.torrents && stats.torrents.length > 0 ? stats.torrents[stats.torrents.length - 1] : null;
 

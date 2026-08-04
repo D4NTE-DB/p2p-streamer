@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '../store';
-import { toggleQuality, setMaxSizeGb } from '../store/configSlice';
-import { Settings, Shield, HardDrive, Filter, Database } from 'lucide-react';
+import { toggleQuality, setMaxSizeGb, setAudioLanguage, setRequireSubtitles } from '../store/configSlice';
+import { Settings, Shield, HardDrive, Filter, Database, Volume2, Subtitles } from 'lucide-react';
 import { QUALITY_CATEGORIES } from '../constants';
 import { SystemStatusPanel } from '../components/SystemStatusPanel';
 
 export const Configuration: React.FC = () => {
   const dispatch = useDispatch();
-  const { selectedQualities, maxSizeGb } = useSelector((state: RootState) => state.config);
+  const { selectedQualities, maxSizeGb, audioLanguage, requireSubtitles } = useSelector((state: RootState) => state.config);
   const [proxyTestResult, setProxyTestResult] = useState<string>('');
 
   const testProxy = async () => {
@@ -56,6 +56,56 @@ export const Configuration: React.FC = () => {
                 <span className="font-medium">{quality}</span>
               </label>
             ))}
+          </div>
+        </section>
+
+        {/* Audio & Subtitle Settings */}
+        <section className="bg-gray-900 border border-gray-800 p-6 rounded-xl shadow-md">
+          <div className="flex items-center gap-2 mb-6 border-b border-gray-800 pb-4">
+            <Volume2 className="w-5 h-5 text-pink-400" />
+            <h2 className="text-xl font-semibold text-gray-200">Audio & Subtitle Preferences</h2>
+          </div>
+          
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-3">Preferred Audio Language</label>
+              <div className="flex gap-3 flex-wrap">
+                {[
+                  { id: 'all', label: '🌍 Any / All' },
+                  { id: 'en', label: '🇺🇸 English' },
+                  { id: 'es', label: '🇲🇽🇪🇸 Español' }
+                ].map(lang => (
+                  <button
+                    key={lang.id}
+                    onClick={() => dispatch(setAudioLanguage(lang.id))}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all border ${
+                      audioLanguage === lang.id
+                        ? 'bg-pink-600/20 border-pink-500 text-pink-400 shadow-md'
+                        : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200'
+                    }`}
+                  >
+                    {lang.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-gray-800">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={requireSubtitles}
+                  onChange={(e) => dispatch(setRequireSubtitles(e.target.checked))}
+                  className="w-5 h-5 rounded border-gray-700 text-pink-500 focus:ring-pink-600 focus:ring-offset-gray-900 bg-gray-800"
+                />
+                <div className="flex flex-col">
+                  <span className="font-medium text-gray-200 flex items-center gap-2">
+                    <Subtitles className="w-4 h-4 text-gray-400" /> Require Subtitles
+                  </span>
+                  <span className="text-xs text-gray-400">Only show torrents that explicitly mention subtitles (SUB, VOSE, etc)</span>
+                </div>
+              </label>
+            </div>
           </div>
         </section>
 

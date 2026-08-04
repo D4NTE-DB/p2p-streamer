@@ -40,21 +40,25 @@ The application follows a modern, scalable React architecture using React Router
 
 ### Codebase Breakdown
 
-*   **`src/App.tsx`**: The Root application wrapper. It handles the Redux `<Provider>`, React Router `<BrowserRouter>`, and sets up global listeners (like Firebase Auth and Firestore `onSnapshot`).
+*   **`src/App.tsx`**: The Root application wrapper. It handles the Redux `<Provider>`, React Router `<BrowserRouter>`, and sets up global listeners (like Firebase Auth, Firestore `onSnapshot`, and proxy telemetry polling).
 *   **`src/store/`**: Contains the Redux Toolkit slices and thunks:
     *   `authSlice.ts`: Manages user authentication state.
     *   `librarySlice.ts`: Manages the user's saved items (Cloud Library).
     *   `configSlice.ts`: Manages user preferences (quality filters, max torrent size filter, audio language preference, and sidebar state).
-    *   `playerSlice.ts`: Manages global video player state (`playingUrl`, `playingInfoHash`, `runtimeSeconds`).
+    *   `playerSlice.ts`: Manages global video player state (`playingUrl`, `playingInfoHash`).
+    *   `telemetrySlice.ts`: Manages global telemetry stats (download/upload speed, active peers) pulled from the local proxy.
+    *   `searchSlice.ts`: Manages the global movie search query and results state.
     *   `libraryThunks.ts`: Encapsulates async Firestore CRUD (`saveStreamToLibrary`, `removeStreamFromLibrary`) and playback initialization.
 *   **`src/layouts/`**:
-    *   `MainLayout.tsx`: The primary wrapper containing the responsive Side Navigation and Header with global movie search. Renders nested routes via `<Outlet />`.
+    *   `MainLayout.tsx`: The primary wrapper containing the responsive Side Navigation and Header. The global search bar is fully integrated with Redux `searchSlice`. Renders nested routes via `<Outlet />`.
 *   **`src/pages/`**: Dedicated page components:
     *   `Dashboard.tsx`: The home page showing trending movie posters.
-    *   `StreamOptions.tsx`: The streaming page that scrapes Torrentio via the backend proxy, fetches Cinemeta movie runtime for timeline hints, filters by size and language, and toggles between poster preview and full-width video player mode with animated layout shift.
+    *   `StreamOptions.tsx`: The streaming page that scrapes Torrentio via the backend proxy, filters by size and language, and toggles between poster preview and full-width video player mode with animated layout shift.
     *   `Configuration.tsx`: User settings page for quality and torrent size limits.
     *   `Login.tsx` & `Register.tsx`: Firebase Email/Password authentication.
-*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (powered by Vidstack, with single-run blur progress reveal, Telemetry HUD overlay on hover, custom Cinemeta duration bar, and analytics logging via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx`.
+*   **`src/components/`**: Presentational (UI) React components like `VideoPlayer.tsx` (powered by Vidstack, with single-run blur progress reveal, Telemetry HUD overlay on hover, and analytics logging via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling), and `SystemStatusPanel.tsx` (consumes global telemetry state).
+*   **`src/utils/`**: Utility functions and helpers:
+    *   `streamParsers.ts`: Pure functions extracted for string parsing (e.g., parsing torrent size, detecting audio languages and subtitles).
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK.
 *   **`src/constants.ts`**: Application-wide constants.
 *   **`src/types.ts`**: Shared TypeScript type definitions.
@@ -70,15 +74,15 @@ This section contains instructions specifically tailored for AI agents interacti
 
 ### Explain Code Prompt
 
-*   **Location:** `.github/prompts/explain-code.prompt.md`
+*   **Location:** `.agents/rules/explain-code.prompt.md`
 *   **Purpose:** Provides context and guidelines for the AI agent when explaining code snippets or functionalities within this project.
 
 ### P2P Streaming Development Prompt
 
-*   **Location:** `.github/prompts/p2p-streaming-dev.prompt.md`
+*   **Location:** `.agents/rules/p2p-streaming-dev.prompt.md`
 *   **Purpose:** Offers specific guidance and architectural insights for the AI agent when assisting with P2P streaming feature development.
 
 ### Refactoring Opportunities Prompt
 
-*   **Location:** `.github/prompts/refactoring-opportunities.prompt.md`
+*   **Location:** `.agents/rules/refactoring-opportunities.prompt.md`
 *   **Purpose:** Informs the AI agent about common refactoring patterns, existing technical debt, or areas to prioritize for code improvement in this project.

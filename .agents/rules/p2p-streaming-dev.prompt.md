@@ -29,11 +29,12 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 
 The frontend codebase is organized to separate concerns, using React Router and Redux Toolkit.
 
-*   **`src/App.tsx`**: The Root application wrapper initializing Redux `<Provider>` and React Router `<BrowserRouter>`.
-*   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
-*   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation.
+*   **`src/App.tsx`**: The Root application wrapper initializing Redux `<Provider>`, React Router `<BrowserRouter>`, and the global proxy telemetry polling loop.
+*   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`, `telemetrySlice`, `searchSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
+*   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation and manages the global movie search bar via Redux.
 *   **`src/pages/`**: Dedicated route components (e.g., `Dashboard.tsx`, `StreamOptions.tsx`, `Login.tsx`).
-*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (powered by Vidstack, handling loading reveals, Telemetry HUD overlay on hover, Cinemeta duration hints, and playback analytics via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx`.
+*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (powered by Vidstack, handling loading reveals, Telemetry HUD overlay on hover, and playback analytics via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx` (consumes global telemetry).
+*   **`src/utils/`**: Utility functions like `streamParsers.ts` which handle complex string extraction (size, languages, subtitles) to keep components clean.
 
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK (Auth and Firestore) and validates the necessary environment variables.
 

@@ -3,6 +3,8 @@ import authReducer from './authSlice';
 import libraryReducer from './librarySlice';
 import configReducer from './configSlice';
 import playerReducer from './playerSlice';
+import telemetryReducer from './telemetrySlice';
+import searchReducer from './searchSlice';
 
 export const store = configureStore({
   reducer: {
@@ -10,6 +12,8 @@ export const store = configureStore({
     library: libraryReducer,
     config: configReducer,
     player: playerReducer,
+    telemetry: telemetryReducer,
+    search: searchReducer,
   },
   middleware: (getDefaultMiddleware) => 
     getDefaultMiddleware({

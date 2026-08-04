@@ -11,6 +11,7 @@ export interface StreamMetadata {
   cleanTitle: string;
   rawTitle: string;
   languages: string[];
+  hasSubtitles: boolean;
 }
 
 export interface CategorizedStreams {

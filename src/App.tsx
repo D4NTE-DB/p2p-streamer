@@ -7,6 +7,7 @@ import { collection, onSnapshot, query } from 'firebase/firestore';
 import { store, type RootState } from './store';
 import { setUser, setAuthLoading } from './store/authSlice';
 import { setLibrary } from './store/librarySlice';
+import { setTelemetryData, setTelemetryOffline, type TelemetryStats } from './store/telemetrySlice';
 import { auth, db } from './firebase';
 import type { LibraryItem } from './types';
 
@@ -49,6 +50,31 @@ const AppContent = () => {
     }, (err) => console.error("Firestore error:", err));
     return () => unsubscribe();
   }, [user, dispatch]);
+
+  // Global Telemetry Polling
+  useEffect(() => {
+    let isMounted = true;
+    const fetchTelemetry = () => {
+      fetch('http://localhost:8888/stats')
+        .then((res) => {
+          if (!res.ok) throw new Error('Proxy offline');
+          return res.json();
+        })
+        .then((data: TelemetryStats) => {
+          if (isMounted) dispatch(setTelemetryData(data));
+        })
+        .catch(() => {
+          if (isMounted) dispatch(setTelemetryOffline());
+        });
+    };
+
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 2500);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [dispatch]);
 
   if (loading) {
     return <FullScreenLoader />;
