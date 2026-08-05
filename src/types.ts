@@ -12,6 +12,7 @@ export interface StreamMetadata {
   rawTitle: string;
   languages: string[];
   hasSubtitles: boolean;
+  format?: string;
 }
 
 export interface CategorizedStreams {

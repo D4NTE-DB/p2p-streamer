@@ -1,5 +1,5 @@
 import React from 'react';
-import { Heart, Users, HardDrive, Tv, ExternalLink, Subtitles } from 'lucide-react';
+import { Heart, Users, HardDrive, Tv, ExternalLink, Subtitles, FileVideo } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import type { StreamMetadata } from '../types';
@@ -96,6 +96,14 @@ export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-600 bg-gray-700/50 text-gray-300" title="Subtitles Available">
               <Subtitles className="w-3.5 h-3.5" />
               <span className="text-[10px] font-bold tracking-wider">CC</span>
+            </div>
+          )}
+
+          {/* Format Badge */}
+          {stream.format && (
+            <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded border border-purple-500/30 text-purple-400 bg-purple-500/10" title="Video Format">
+              <FileVideo className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">{stream.format}</span>
             </div>
           )}
 

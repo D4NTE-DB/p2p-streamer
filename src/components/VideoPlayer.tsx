@@ -84,13 +84,15 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
 
   const proxyDuration = telemetry?.durationSeconds ?? null;
 
-  // Override Vidstack's internal duration state if native stream reports Infinity or 0
+  // Always apply server-probed duration to Vidstack when available.
+  // This handles: Infinity (live-like streams), 0 (metadata not yet parsed),
+  // and inaccurate durations from partially downloaded containers.
   useEffect(() => {
     if (
       remote &&
       proxyDuration &&
       proxyDuration > 0 &&
-      (!isFinite(duration) || duration === 0)
+      (!isFinite(duration) || duration === 0 || Math.abs(duration - proxyDuration) > 2)
     ) {
       remote.changeDuration(proxyDuration);
     }

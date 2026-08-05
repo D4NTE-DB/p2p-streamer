@@ -10,7 +10,7 @@ import { closePlayer } from '../store/playerSlice';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState, AppDispatch } from '../store';
 
-import { parseSizeToBytes, detectLanguages, detectSubtitles } from '../utils/streamParsers';
+import { parseSizeToBytes, detectLanguages, detectSubtitles, detectFormat } from '../utils/streamParsers';
 
 export const StreamOptions: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -79,6 +79,7 @@ export const StreamOptions: React.FC = () => {
 
           const languages = detectLanguages(cleanTitle);
           const hasSubtitles = detectSubtitles(cleanTitle);
+          const format = detectFormat(cleanTitle);
 
           categorized[quality].push({
             id: stream.infoHash || stream.url || Math.random().toString(),
@@ -92,7 +93,8 @@ export const StreamOptions: React.FC = () => {
             quality,
             rawTitle,
             languages,
-            hasSubtitles
+            hasSubtitles,
+            format
           });
         });
 

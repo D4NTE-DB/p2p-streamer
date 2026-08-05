@@ -14,7 +14,7 @@ const initialState: ConfigState = {
   selectedQualities: {
     '4K': true,
     '1080p': true,
-    '720p': false,
+    '720p': true,
     'SD/Other': true
   },
   maxSizeGb: 10,

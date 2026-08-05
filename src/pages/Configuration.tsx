@@ -128,7 +128,7 @@ export const Configuration: React.FC = () => {
             <input 
               type="range" 
               min={1} 
-              max={100} 
+              max={10} 
               step={1}
               value={maxSizeGb}
               onChange={(e) => dispatch(setMaxSizeGb(Number(e.target.value)))}
@@ -137,9 +137,6 @@ export const Configuration: React.FC = () => {
             <div className="flex justify-between text-xs text-gray-500 font-mono">
               <span>1 GB</span>
               <span>10 GB</span>
-              <span>25 GB</span>
-              <span>50 GB</span>
-              <span>100 GB</span>
             </div>
           </div>
         </section>

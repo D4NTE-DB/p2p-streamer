@@ -50,3 +50,11 @@ export function detectLanguages(titleStr: string): string[] {
 export function detectSubtitles(titleStr: string): boolean {
   return /SUB|SUBS|SUBBED|SUBTITULADO|LEGENDADO|VOSE/i.test(titleStr);
 }
+
+export function detectFormat(titleStr: string): string {
+  const upper = titleStr.toUpperCase();
+  if (upper.includes('MKV') || upper.includes('.MKV')) return 'MKV';
+  if (upper.includes('MP4') || upper.includes('.MP4')) return 'MP4';
+  if (upper.includes('AVI') || upper.includes('.AVI')) return 'AVI';
+  return '';
+}
