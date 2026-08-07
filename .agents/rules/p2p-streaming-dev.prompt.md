@@ -55,6 +55,8 @@ Apply these rules to any code you generate for this project:
 
 ## Coding standards
 
+- **Dependency Management & Node Version:** The project relies on recent major versions of Vite (8.x) and WebTorrent (3.x) which require Node.js 22+. Avoid deleting `package-lock.json` and running a blind `npm install`, as unpinned updates can introduce native binding crashes (`EBADENGINE`) on older Node environments. Use `npm ci` when possible.
+- **Native Bindings (`node-datachannel`):** The server depends on `node-datachannel` (a C++ native addon) through the chain `webtorrent → @thaunknown/simple-peer → webrtc-polyfill → node-datachannel`. Its prebuilt binary (`build/Release/node_datachannel.node`) can silently fail to download during `npm install`, especially after deleting `package-lock.json` or switching branches. If `npm run dev:server` crashes with `Cannot find module '../../../build/Release/node_datachannel.node'`, fix it with `npm rebuild node-datachannel` or `cd node_modules/node-datachannel && npx prebuild-install -r napi`.
 - **TypeScript strictness:** precise interfaces for API responses (`TorrentioStream`) and Firestore documents (`LibraryItem`); never use `any`; handle missing/inconsistent Torrentio fields gracefully. All types are centralized in `src/types.ts`.
 - **Firebase Interaction:** All Firestore operations (CRUD for the `library` collection) are user-specific, scoped to `users/{userId}/library`. Authentication is handled via Firebase Email/Password Authentication.
 - **React Compiler compatibility:** don't hand-write `useMemo`/`useCallback` unless a third-party library specifically requires it — assume the compiler handles memoization.

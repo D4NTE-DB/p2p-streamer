@@ -25,6 +25,8 @@ This `GEMINI.md` file provides essential instructions and context for the `p2p-s
 
 ## Development Guidelines
 
+*   **Dependency Management & Node.js:** Node.js 22+ is strongly recommended due to modern dependencies (Vite 8, WebTorrent 3). **Do NOT delete `package-lock.json`** to run a fresh `npm i` unless absolutely necessary, as unpinned minor updates (like Vite 8.2.0) can introduce native binding errors (`EBADENGINE`) on older Node environments. Use `npm ci` when possible.
+*   **Native Bindings (`node-datachannel`):** The WebTorrent stack depends on `node-datachannel` (a C++ native addon) via `webtorrent → @thaunknown/simple-peer → webrtc-polyfill → node-datachannel`. Its prebuilt binary (`build/Release/node_datachannel.node`) can silently fail to download during `npm install` (especially after deleting `package-lock.json` or switching branches). If the server (`npm run dev:server`) crashes with `Cannot find module '../../../build/Release/node_datachannel.node'`, run `npm rebuild node-datachannel` or `cd node_modules/node-datachannel && npx prebuild-install -r napi` to recover the binary.
 *   **Coding Style:** Adherence to ESLint rules for code quality and consistency, and TailwindCSS for styling.
 *   **Testing:** A formal testing strategy needs to be defined. No common test files (e.g., `.test.ts`, `.spec.tsx`) were found in the `src` directory.
 *   **Branching Strategy:** To be defined by project maintainers.
