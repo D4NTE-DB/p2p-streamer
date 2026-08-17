@@ -5,12 +5,51 @@ import rangeParser from 'range-parser';
 import { exec } from 'child_process';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+import {
+  getSubtitleMetadata,
+  saveSubtitleMetadata,
+  getVttFile,
+  saveVttFile,
+  getCacheStats
+} from './subtitleCache';
+
+function loadEnv() {
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx !== -1) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          let val = trimmed.slice(eqIdx + 1).trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (!process.env[key]) {
+            process.env[key] = val;
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Server] Could not load .env file:', err.message);
+  }
+}
+loadEnv();
+
 if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic as unknown as string);
+}
+if (ffprobeStatic && ffprobeStatic.path) {
+  ffmpeg.setFfprobePath(ffprobeStatic.path);
 }
 
 process.on('uncaughtException', (err) => {
@@ -23,8 +62,6 @@ process.on('unhandledRejection', (reason: any) => {
 
 const app = express();
 const port = 8888;
-
-// Temporary directories for chunks removed
 
 // Use CORS to allow requests from the React frontend (e.g., http://localhost:5173)
 app.use(cors());
@@ -57,6 +94,228 @@ app.get('/api/torrentio/stream/:type/:imdbId.json', async (req, res) => {
     console.error('[Server] Torrentio proxy error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch from Torrentio proxy' });
   }
+});
+
+// OpenSubtitles Helper Function to Search Subtitles
+async function fetchOpenSubtitlesSearch(imdbId: string, lang: string = 'en'): Promise<any[]> {
+  const apiKey = process.env.OPENSUBTITLES_API_KEY;
+  if (!apiKey || apiKey === 'your-api-key-here') {
+    console.warn('[OpenSubtitles] OPENSUBTITLES_API_KEY is not set or is using placeholder.');
+    return [];
+  }
+
+  // OpenSubtitles accepts imdb_id as numeric or with tt prefix
+  const languages = lang === 'all' ? 'en' : lang || 'en';
+  const url = `https://api.opensubtitles.com/api/v1/subtitles?imdb_id=${encodeURIComponent(imdbId)}&languages=${encodeURIComponent(languages)}&order_by=download_count&order_direction=desc`;
+
+  const response = await fetch(url, {
+    headers: {
+      'Api-Key': apiKey,
+      'User-Agent': 'P2PStreamer v1.0.0',
+      'Accept': 'application/json',
+    },
+  });
+
+  if (response.status === 429) {
+    console.warn('[OpenSubtitles] Rate limit reached (429).');
+    return [];
+  }
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    console.error(`[OpenSubtitles] Search failed with status ${response.status}: ${errText}`);
+    return [];
+  }
+
+  const json: any = await response.json();
+  const rawData = Array.isArray(json?.data) ? json.data : [];
+
+  const tracks = rawData.map((item: any) => {
+    const attr = item.attributes || {};
+    const file = Array.isArray(attr.files) && attr.files[0] ? attr.files[0] : {};
+    return {
+      fileId: file.file_id,
+      label: attr.release || `${attr.language || 'Subtitles'} (${file.file_name || 'VTT'})`,
+      language: attr.language || 'en',
+      downloadCount: attr.download_count || 0,
+      hearingImpaired: !!attr.hearing_impaired,
+    };
+  }).filter((t: any) => t.fileId);
+
+  return tracks;
+}
+
+// OpenSubtitles Search Endpoint (Cache-First)
+app.get('/api/subtitles/search', async (req, res) => {
+  const imdbId = req.query.imdbId as string;
+  const lang = (req.query.lang as string) || 'en';
+
+  if (!imdbId) {
+    return res.status(400).json({ error: 'Missing imdbId query parameter', data: [] });
+  }
+
+  try {
+    // 1. Check local persistent disk cache first
+    const cached = getSubtitleMetadata(imdbId);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      return res.json({ data: cached, cached: true });
+    }
+
+    // 2. Fetch from OpenSubtitles API
+    const tracks = await fetchOpenSubtitlesSearch(imdbId, lang);
+    if (tracks.length > 0) {
+      saveSubtitleMetadata(imdbId, tracks);
+    }
+
+    return res.json({ data: tracks, cached: false });
+  } catch (err: any) {
+    console.error(`[Server] Error searching subtitles for ${imdbId}:`, err.message);
+    return res.status(500).json({ error: 'Failed to retrieve subtitles', data: [] });
+  }
+});
+
+let openSubtitlesToken: string | null = null;
+let tokenExpiresAt: number = 0;
+
+async function getOpenSubtitlesAuthToken(): Promise<string | null> {
+  const apiKey = process.env.OPENSUBTITLES_API_KEY;
+  const username = process.env.OPENSUBTITLES_USERNAME;
+  const password = process.env.OPENSUBTITLES_PASSWORD;
+
+  if (!apiKey || !username || !password) {
+    return null;
+  }
+
+  // Reuse existing token if valid
+  if (openSubtitlesToken && Date.now() < tokenExpiresAt) {
+    return openSubtitlesToken;
+  }
+
+  try {
+    const res = await fetch('https://api.opensubtitles.com/api/v1/login', {
+      method: 'POST',
+      headers: {
+        'Api-Key': apiKey,
+        'User-Agent': 'P2PStreamer v1.0.0',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.warn(`[OpenSubtitles] Login failed (${res.status}): ${text}`);
+      return null;
+    }
+
+    const data: any = await res.json();
+    if (data?.token) {
+      openSubtitlesToken = data.token;
+      tokenExpiresAt = Date.now() + 6 * 60 * 60 * 1000; // 6 hours
+      console.log(`[OpenSubtitles] Logged in as "${data.user?.level || 'User'}" (Downloads left: ${data.user?.allowed_downloads ?? 'N/A'})`);
+      return openSubtitlesToken;
+    }
+  } catch (err: any) {
+    console.error('[OpenSubtitles] Login error:', err.message);
+  }
+
+  return null;
+}
+
+// OpenSubtitles Download Endpoint (Cache-First with VTT conversion)
+app.get('/api/subtitles/download/:fileId', async (req, res) => {
+  const { fileId } = req.params;
+
+  if (!fileId) {
+    return res.status(400).send('Missing fileId');
+  }
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  try {
+    // 1. Check local disk cache for cached .vtt file
+    const cachedVtt = getVttFile(fileId);
+    if (cachedVtt) {
+      res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+      return res.send(cachedVtt);
+    }
+
+    const apiKey = process.env.OPENSUBTITLES_API_KEY;
+    if (!apiKey || apiKey === 'your-api-key-here') {
+      console.warn('[OpenSubtitles] Cannot download subtitle: OPENSUBTITLES_API_KEY missing.');
+      return res.status(503).send('OpenSubtitles API key not configured on proxy server');
+    }
+
+    const headers: Record<string, string> = {
+      'Api-Key': apiKey,
+      'User-Agent': 'P2PStreamer v1.0.0',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+
+    const token = await getOpenSubtitlesAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    // 2. Request download link from OpenSubtitles in webvtt format
+    const dlResponse = await fetch('https://api.opensubtitles.com/api/v1/download', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        file_id: parseInt(fileId, 10),
+        sub_format: 'webvtt',
+      }),
+    });
+
+    if (dlResponse.status === 429) {
+      console.warn('[OpenSubtitles] Download rate limit reached (429).');
+      return res.status(429).send('OpenSubtitles rate limit reached. Please try again later.');
+    }
+
+    if (!dlResponse.ok) {
+      const errText = await dlResponse.text().catch(() => '');
+      console.error(`[OpenSubtitles] Download request failed (${dlResponse.status}): ${errText}`);
+      return res.status(dlResponse.status).send('Failed to obtain download link from OpenSubtitles');
+    }
+
+    const dlJson: any = await dlResponse.json();
+    const downloadLink = dlJson?.link;
+
+    if (!downloadLink) {
+      console.error('[OpenSubtitles] No download link returned:', dlJson);
+      return res.status(500).send('OpenSubtitles did not provide a download link');
+    }
+
+    // 3. Fetch the raw subtitle file content
+    const fileRes = await fetch(downloadLink);
+    if (!fileRes.ok) {
+      console.error(`[OpenSubtitles] Fetching raw subtitle failed with status ${fileRes.status}`);
+      return res.status(fileRes.status).send('Failed to fetch subtitle content from source URL');
+    }
+
+    let vttContent = await fileRes.text();
+
+    // Ensure it starts with WEBVTT if missing
+    if (!vttContent.trim().startsWith('WEBVTT')) {
+      vttContent = `WEBVTT\n\n${vttContent}`;
+    }
+
+    // 4. Save permanently to disk cache
+    saveVttFile(fileId, vttContent);
+
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    return res.send(vttContent);
+  } catch (err: any) {
+    console.error(`[Server] Error downloading subtitle file ${fileId}:`, err.message);
+    return res.status(500).send('Internal error downloading subtitle');
+  }
+});
+
+// Cache diagnostics endpoint
+app.get('/api/subtitles/cache-stats', (_req, res) => {
+  return res.json({ status: 'online', cache: getCacheStats() });
 });
 
 const client = new WebTorrent();
@@ -202,6 +461,10 @@ function getOrProbeDuration(file: any, infoHash: string): Promise<number> {
   const promise = new Promise<number>((resolve, reject) => {
     try {
       const inputStream = file.createReadStream();
+      // Polyfill unpipe for WebTorrent stream to prevent fluent-ffmpeg crash
+      if (typeof inputStream.unpipe !== 'function') {
+        inputStream.unpipe = () => {};
+      }
       ffmpeg(inputStream).ffprobe((err: any, metadata: any) => {
         if (typeof inputStream.destroy === 'function') inputStream.destroy();
         if (err) {
@@ -249,6 +512,11 @@ function serveStream(torrent: any, req: express.Request, res: express.Response) 
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Content-Disposition', 'inline');
+
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
 
   const rangeHeader = req.headers.range;
 
@@ -320,7 +588,7 @@ app.get('/stream/:infoHash', async (req, res) => {
     torrentLastAccessed.set(infoHash, Date.now());
     attachTorrentLogging(torrent);
 
-    const READY_TIMEOUT_MS = 30000;
+    const READY_TIMEOUT_MS = 15000;
     const readyTimeout = setTimeout(() => {
       if (!torrent.ready) {
         console.warn(`[Server] Discovery timeout for ${infoHash}`);
@@ -374,7 +642,7 @@ app.get('/hls-stream/:infoHash/index.m3u8', async (req, res) => {
     torrentLastAccessed.set(infoHash, Date.now());
     attachTorrentLogging(torrent);
 
-    const READY_TIMEOUT_MS = 30000;
+    const READY_TIMEOUT_MS = 15000;
     const readyTimeout = setTimeout(() => {
       if (!torrent.ready) {
         console.warn(`[Server] Discovery timeout for ${infoHash} (HLS playlist)`);
@@ -551,6 +819,72 @@ app.get('/stats', (_req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`[Server] High-performance P2P proxy server listening on http://localhost:${port}`);
-});
+// Background Subtitle Pre-warming for Trending Movies
+async function prewarmTrendingSubtitles() {
+  const apiKey = process.env.OPENSUBTITLES_API_KEY;
+  if (!apiKey || apiKey === 'your-api-key-here') {
+    console.log('[Subtitles Pre-warm] Skipped: OPENSUBTITLES_API_KEY not configured.');
+    return;
+  }
+
+  console.log('[Subtitles Pre-warm] Starting background pre-warming for trending movies...');
+
+  try {
+    const res = await fetch('https://v3-cinemeta.strem.io/catalog/movie/top.json', {
+      headers: {
+        'User-Agent': 'Stremio/4.4.168 (desktop)',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!res.ok) {
+      console.warn(`[Subtitles Pre-warm] Failed to fetch trending movies (status: ${res.status})`);
+      return;
+    }
+
+    const data: any = await res.json();
+    const movies = Array.isArray(data?.metas) ? data.metas : [];
+    console.log(`[Subtitles Pre-warm] Found ${movies.length} trending movies to verify.`);
+
+    let cachedCount = 0;
+    let fetchedCount = 0;
+
+    // Pre-warm the top 25 movies
+    const candidateList = movies.slice(0, 25);
+
+    for (const movie of candidateList) {
+      if (!movie || !movie.id) continue;
+
+      const existing = getSubtitleMetadata(movie.id);
+      if (existing && existing.length > 0) {
+        cachedCount++;
+        continue;
+      }
+
+      // Throttle: 300ms between requests to stay well within OpenSubtitles rate limits
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const tracks = await fetchOpenSubtitlesSearch(movie.id, 'en');
+      if (tracks.length > 0) {
+        saveSubtitleMetadata(movie.id, tracks);
+        fetchedCount++;
+        console.log(`[Subtitles Pre-warm] Cached ${tracks.length} subtitles for "${movie.name}" (${movie.id})`);
+      }
+    }
+
+    console.log(`[Subtitles Pre-warm] Finished: ${cachedCount} already cached, ${fetchedCount} freshly pre-warmed.`);
+  } catch (err: any) {
+    console.warn('[Subtitles Pre-warm] Non-fatal error during pre-warming:', err.message);
+  }
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => {
+    console.log(`[Server] High-performance P2P proxy server listening on http://localhost:${port}`);
+    prewarmTrendingSubtitles().catch((err) => {
+      console.warn('[Subtitles Pre-warm] Background pre-warm failed:', err.message);
+    });
+  });
+}
+
+export { app };
