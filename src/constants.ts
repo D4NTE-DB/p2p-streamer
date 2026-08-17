@@ -1,7 +1,9 @@
 import type { CategorizedStreams } from './types';
 
 export const CINEMETA_API_URL = 'https://v3-cinemeta.strem.io';
-export const TORRENTIO_API_URL = 'http://localhost:8888/api/torrentio';
+export const PROXY_BASE_URL = import.meta.env.VITE_PROXY_URL || 'http://localhost:8888';
+// Torrentio natively supports CORS, so we can fetch directly from the client and bypass Render's datacenter IP block
+export const TORRENTIO_API_URL = 'https://torrentio.strem.fun';
 export const QUALITY_CATEGORIES: (keyof CategorizedStreams)[] = ['4K', '1080p', '720p', 'SD/Other'];
 export const PLAYING_TOAST_DURATION = 5000;
 export const CACHE_MAX_SIZE = 20; // Cap at 20 recent searches

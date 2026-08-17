@@ -11,6 +11,7 @@ export interface StreamMetadata {
   cleanTitle: string;
   rawTitle: string;
   languages: string[];
+  hasSubtitles: boolean;
 }
 
 export interface CategorizedStreams {
@@ -52,3 +53,11 @@ export interface CinemetaMovie {
   type?: string;
   runtime?: string;
 }
+
+export interface SubtitleTrack {
+  fileId: number;
+  label: string;
+  language: string;
+  downloadCount: number;
+  hearingImpaired: boolean;
+}

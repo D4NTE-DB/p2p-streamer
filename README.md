@@ -78,9 +78,21 @@ Now, let's configure the React application itself.
     ```
 
 2.  **Install Dependencies**:
+    > **⚠️ Important Node.js Requirement**: This project uses modern dependencies (Vite 8, WebTorrent 3) that require **Node.js 22 or higher**. Do **NOT** delete `package-lock.json` and run `npm install` blindly, especially on older Node environments (like Node 20), as unpinned updates can introduce native binding crashes (`EBADENGINE`). Use `npm ci` when possible to strictly install pinned versions.
+
     ```bash
     npm install
     ```
+
+    > **🔧 Troubleshooting: `node-datachannel` native binding**
+    > If `npm run dev:server` crashes with `Cannot find module '../../../build/Release/node_datachannel.node'`, the prebuilt C++ binary for `node-datachannel` failed to download during install (this is a silent failure). Fix it by running:
+    > ```bash
+    > npm rebuild node-datachannel
+    > ```
+    > Or manually:
+    > ```bash
+    > cd node_modules/node-datachannel && npx prebuild-install -r napi
+    > ```
 
 3.  **Configure Environment Variables**:
     This project uses environment variables to handle sensitive keys like your Firebase configuration.

@@ -1,9 +1,11 @@
 import React from 'react';
-import { Heart, Users, HardDrive, Tv, ExternalLink } from 'lucide-react';
+import { Heart, Users, HardDrive, Tv, ExternalLink, Subtitles } from 'lucide-react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import type { StreamMetadata } from '../types';
 import type { RootState, AppDispatch } from '../store';
 import { saveStreamToLibrary, removeStreamFromLibrary, launchStreamPlayback } from '../store/libraryThunks';
+import { PROXY_BASE_URL } from '../constants';
 
 interface StreamItemProps {
   stream: StreamMetadata;
@@ -22,9 +24,16 @@ const FLAG_MAP: Record<string, { flag: string; label: string; border: string }> 
 
 export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
   const dispatch = useDispatch<AppDispatch>();
+  const { imdbId } = useParams();
+  const [searchParams] = useSearchParams();
+  const title = searchParams.get('title') || 'Unknown Title';
+  const poster = searchParams.get('poster') || '';
+
   const isSaved = useSelector((state: RootState) =>
     state.library.items.some((item) => item.infoHash === stream.infoHash)
   );
+  const lastPlayedInfoHash = useSelector((state: RootState) => state.player.lastPlayedInfoHash);
+  const isRecentlyPlayed = lastPlayedInfoHash === stream.infoHash;
 
   const handleSaveToggle = () => {
     if (isSaved) {
@@ -35,15 +44,24 @@ export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
   };
 
   const handlePlayInBrowser = () => {
-    dispatch(launchStreamPlayback(stream.infoHash));
+    dispatch(launchStreamPlayback({ 
+      infoHash: stream.infoHash, 
+      title, 
+      poster, 
+      imdbId 
+    }));
   };
 
   const handlePlayInVLC = () => {
-    fetch(`http://localhost:8888/play-vlc/${stream.infoHash}`).catch(console.error);
+    fetch(`${PROXY_BASE_URL}/play-vlc/${stream.infoHash}`).catch(console.error);
   };
 
   return (
-    <div className="p-4 hover:bg-gray-800/50 transition-colors flex items-center justify-between group">
+    <div className={`p-4 transition-colors flex items-center justify-between group ${
+      isRecentlyPlayed 
+        ? 'bg-blue-900/20 border-l-4 border-blue-500' 
+        : 'hover:bg-gray-800/50 border-l-4 border-transparent'
+    }`}>
       <div className="flex-1 min-w-0 pr-4">
         <div className="mb-2 flex items-center gap-2 flex-wrap">
           <span className="text-sm font-semibold text-gray-200 truncate" title={stream.cleanTitle}>
@@ -70,6 +88,14 @@ export const StreamItem = React.memo<StreamItemProps>(({ stream }) => {
                   </span>
                 );
               })}
+            </div>
+          )}
+
+          {/* Subtitles Badge */}
+          {stream.hasSubtitles && (
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-600 bg-gray-700/50 text-gray-300" title="Subtitles Available">
+              <Subtitles className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold tracking-wider">CC</span>
             </div>
           )}
 

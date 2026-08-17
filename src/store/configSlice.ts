@@ -5,19 +5,23 @@ interface ConfigState {
   sidebarCollapsed: boolean;
   selectedQualities: Record<string, boolean>;
   maxSizeGb: number;
-  languageFilter: 'all' | 'es' | 'en';
+  audioLanguage: string;
+  subtitleLanguage: string;
+  requireSubtitles: boolean;
 }
 
 const initialState: ConfigState = {
-  sidebarCollapsed: false,
+  sidebarCollapsed: true,
   selectedQualities: {
-    '4K': true,
+    '4K': false,
     '1080p': true,
-    '720p': false,
+    '720p': true,
     'SD/Other': true
   },
-  maxSizeGb: 15,
-  languageFilter: 'all'
+  maxSizeGb: 5,
+  audioLanguage: 'all',
+  subtitleLanguage: 'en',
+  requireSubtitles: false
 };
 
 export const configSlice = createSlice({
@@ -40,11 +44,26 @@ export const configSlice = createSlice({
     setMaxSizeGb: (state, action: PayloadAction<number>) => {
       state.maxSizeGb = action.payload;
     },
-    setLanguageFilter: (state, action: PayloadAction<'all' | 'es' | 'en'>) => {
-      state.languageFilter = action.payload;
+    setAudioLanguage: (state, action: PayloadAction<string>) => {
+      state.audioLanguage = action.payload;
+    },
+    setSubtitleLanguage: (state, action: PayloadAction<string>) => {
+      state.subtitleLanguage = action.payload;
+    },
+    setRequireSubtitles: (state, action: PayloadAction<boolean>) => {
+      state.requireSubtitles = action.payload;
     }
   },
 });
 
-export const { toggleSidebar, setSidebarCollapsed, toggleQuality, setQualities, setMaxSizeGb, setLanguageFilter } = configSlice.actions;
+export const {
+  toggleSidebar,
+  setSidebarCollapsed,
+  toggleQuality,
+  setQualities,
+  setMaxSizeGb,
+  setAudioLanguage,
+  setSubtitleLanguage,
+  setRequireSubtitles
+} = configSlice.actions;
 export default configSlice.reducer;

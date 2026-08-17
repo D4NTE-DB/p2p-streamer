@@ -7,8 +7,10 @@ import { collection, onSnapshot, query } from 'firebase/firestore';
 import { store, type RootState } from './store';
 import { setUser, setAuthLoading } from './store/authSlice';
 import { setLibrary } from './store/librarySlice';
+import { setTelemetryData, setTelemetryOffline, type TelemetryStats } from './store/telemetrySlice';
 import { auth, db } from './firebase';
 import type { LibraryItem } from './types';
+import { PROXY_BASE_URL } from './constants';
 
 // Layout & Pages
 import { MainLayout } from './layouts/MainLayout';
@@ -25,6 +27,7 @@ const appId = import.meta.env.VITE_APP_ID || 'p2p-streaming-app';
 const AppContent = () => {
   const dispatch = useDispatch();
   const { user, loading } = useSelector((state: RootState) => state.auth);
+  const playingUrl = useSelector((state: RootState) => state.player.playingUrl);
 
   useEffect(() => {
     dispatch(setAuthLoading(true));
@@ -49,6 +52,36 @@ const AppContent = () => {
     }, (err) => console.error("Firestore error:", err));
     return () => unsubscribe();
   }, [user, dispatch]);
+
+  // Global Telemetry Polling
+  useEffect(() => {
+    if (!playingUrl) {
+      dispatch(setTelemetryOffline());
+      return;
+    }
+
+    let isMounted = true;
+    const fetchTelemetry = () => {
+      fetch(`${PROXY_BASE_URL}/stats`)
+        .then((res) => {
+          if (!res.ok) throw new Error('Proxy offline');
+          return res.json();
+        })
+        .then((data: TelemetryStats) => {
+          if (isMounted) dispatch(setTelemetryData(data));
+        })
+        .catch(() => {
+          if (isMounted) dispatch(setTelemetryOffline());
+        });
+    };
+
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 2500);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [dispatch, playingUrl]);
 
   if (loading) {
     return <FullScreenLoader />;

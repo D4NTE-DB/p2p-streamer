@@ -5,76 +5,12 @@ import { TORRENTIO_API_URL, CINEMETA_API_URL, QUALITY_CATEGORIES } from '../cons
 import { StreamItem } from '../components/StreamItem';
 import { VideoPlayer } from '../components/VideoPlayer';
 import type { CategorizedStreams, TorrentioStream } from '../types';
-import { setLanguageFilter } from '../store/configSlice';
-import { setRuntimeSeconds, closePlayer } from '../store/playerSlice';
+import { setAudioLanguage } from '../store/configSlice';
+import { closePlayer } from '../store/playerSlice';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState, AppDispatch } from '../store';
 
-function parseSizeToBytes(sizeStr: string): number {
-  if (!sizeStr || sizeStr === 'Unknown Size') return 0;
-  const match = sizeStr.match(/^([\d.]+)\s*(GB|MB|TB|KB|B)/i);
-  if (!match) return 0;
-  const val = parseFloat(match[1]);
-  const unit = match[2].toUpperCase();
-  if (unit === 'TB') return val * 1024 * 1024 * 1024 * 1024;
-  if (unit === 'GB') return val * 1024 * 1024 * 1024;
-  if (unit === 'MB') return val * 1024 * 1024;
-  if (unit === 'KB') return val * 1024;
-  return val;
-}
-
-function parseRuntimeToSeconds(runtimeStr?: string): number {
-  if (!runtimeStr) return 0;
-  const minMatch = runtimeStr.match(/(\d+)\s*min/i);
-  if (minMatch) return parseInt(minMatch[1], 10) * 60;
-
-  const hoursMatch = runtimeStr.match(/(\d+)\s*h(?:our)?s?/i);
-  const hoursMinsMatch = runtimeStr.match(/(\d+)\s*m(?:in)?s?/i);
-  if (hoursMatch) {
-    const hours = parseInt(hoursMatch[1], 10);
-    const mins = hoursMinsMatch ? parseInt(hoursMinsMatch[1], 10) : 0;
-    return (hours * 60 + mins) * 60;
-  }
-
-  const bareNum = parseInt(runtimeStr, 10);
-  if (!isNaN(bareNum) && bareNum > 0) return bareNum * 60;
-  return 0;
-}
-
-function detectLanguages(titleStr: string): string[] {
-  const langs = new Set<string>();
-
-  if (/MULTI|DUAL|TRIAUDIO|AUDIO\s*MULTI/i.test(titleStr)) {
-    langs.add('MULTI');
-  }
-  if (/LATINO|LAT|MEXICAN|MEXICO|\bMX\b|SPANISH\s*LATINO/i.test(titleStr)) {
-    langs.add('MX');
-  }
-  if (/CASTELLANO|SPANISH|ESPAÑOL|\bESP\b|[\.\[\-_]ES[\.\]\-_]/i.test(titleStr) && !langs.has('MX')) {
-    langs.add('ES');
-  }
-  if (/ENGLISH|ENG|[\.\[\-_]EN[\.\]\-_]/i.test(titleStr)) {
-    langs.add('EN');
-  }
-  if (/FRENCH|FRANCAIS|FRANÇAIS|[\.\[\-_]FR[\.\]\-_]/i.test(titleStr)) {
-    langs.add('FR');
-  }
-  if (/PORTUGUESE|PORTUGUES|PTBR|PT-BR|[\.\[\-_]PT[\.\]\-_]/i.test(titleStr)) {
-    langs.add('PT');
-  }
-  if (/ITALIAN|ITALIANO|[\.\[\-_]IT[\.\]\-_]/i.test(titleStr)) {
-    langs.add('IT');
-  }
-  if (/GERMAN|DEUTSCH|[\.\[\-_]DE[\.\]\-_]/i.test(titleStr)) {
-    langs.add('DE');
-  }
-
-  if (langs.size === 0) {
-    langs.add('EN');
-  }
-
-  return Array.from(langs);
-}
+import { parseSizeToBytes, detectLanguages, detectSubtitles } from '../utils/streamParsers';
 
 export const StreamOptions: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -90,21 +26,9 @@ export const StreamOptions: React.FC = () => {
   
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const { selectedQualities, maxSizeGb, languageFilter } = useSelector((state: RootState) => state.config);
-  const { playingUrl, playingInfoHash, runtimeSeconds } = useSelector((state: RootState) => state.player);
+  const { selectedQualities, maxSizeGb, audioLanguage, requireSubtitles } = useSelector((state: RootState) => state.config);
+  const { playingUrl, playingInfoHash } = useSelector((state: RootState) => state.player);
 
-  // Fetch Cinemeta metadata for movie runtime hint
-  useEffect(() => {
-    if (!imdbId) return;
-    fetch(`${CINEMETA_API_URL}/meta/movie/${imdbId}.json`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.meta?.runtime) {
-          dispatch(setRuntimeSeconds(parseRuntimeToSeconds(data.meta.runtime)));
-        }
-      })
-      .catch((err) => console.error('[Cinemeta Runtime] Error:', err));
-  }, [imdbId, dispatch]);
 
   // Smooth scroll to player when video starts playing
   useEffect(() => {
@@ -154,6 +78,7 @@ export const StreamOptions: React.FC = () => {
           else if (titleUpper.includes('720P')) quality = '720p';
 
           const languages = detectLanguages(cleanTitle);
+          const hasSubtitles = detectSubtitles(cleanTitle);
 
           categorized[quality].push({
             id: stream.infoHash || stream.url || Math.random().toString(),
@@ -166,22 +91,24 @@ export const StreamOptions: React.FC = () => {
             seeders,
             quality,
             rawTitle,
-            languages
+            languages,
+            hasSubtitles
           });
         });
 
         // Filter by max size & language preference, then sort by seeders descending
-        const maxSizeBytes = (maxSizeGb || 15) * 1024 * 1024 * 1024;
+        const maxSizeBytes = (maxSizeGb || 10) * 1024 * 1024 * 1024;
         Object.keys(categorized).forEach(key => {
           categorized[key as keyof CategorizedStreams] = categorized[key as keyof CategorizedStreams]
             .filter(item => {
               const bytes = parseSizeToBytes(item.size);
               const passesSize = bytes === 0 || bytes <= maxSizeBytes;
               if (!passesSize) return false;
+              if (requireSubtitles && !item.hasSubtitles) return false;
 
-              if (languageFilter === 'es') {
+              if (audioLanguage === 'es') {
                 return item.languages.some(l => l === 'MX' || l === 'ES' || l === 'MULTI');
-              } else if (languageFilter === 'en') {
+              } else if (audioLanguage === 'en') {
                 return item.languages.some(l => l === 'EN' || l === 'MULTI');
               }
               return true;
@@ -203,7 +130,7 @@ export const StreamOptions: React.FC = () => {
     };
 
     fetchStreams();
-  }, [imdbId, selectedQualities, maxSizeGb, languageFilter]);
+  }, [imdbId, selectedQualities, maxSizeGb, audioLanguage, requireSubtitles]);
 
   const renderStreamListContent = () => (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden shadow-lg">
@@ -212,9 +139,9 @@ export const StreamOptions: React.FC = () => {
         <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Audio Language</span>
         <div className="flex items-center bg-gray-900 p-1 rounded-lg border border-gray-800 gap-1">
           <button
-            onClick={() => dispatch(setLanguageFilter('all'))}
+            onClick={() => dispatch(setAudioLanguage('all'))}
             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-              languageFilter === 'all'
+              audioLanguage === 'all'
                 ? 'bg-blue-600 text-white shadow-md'
                 : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
             }`}
@@ -222,9 +149,9 @@ export const StreamOptions: React.FC = () => {
             🌍 All
           </button>
           <button
-            onClick={() => dispatch(setLanguageFilter('es'))}
+            onClick={() => dispatch(setAudioLanguage('es'))}
             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-              languageFilter === 'es'
+              audioLanguage === 'es'
                 ? 'bg-blue-600 text-white shadow-md'
                 : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
             }`}
@@ -232,9 +159,9 @@ export const StreamOptions: React.FC = () => {
             🇲🇽🇪🇸 Español
           </button>
           <button
-            onClick={() => dispatch(setLanguageFilter('en'))}
+            onClick={() => dispatch(setAudioLanguage('en'))}
             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-              languageFilter === 'en'
+              audioLanguage === 'en'
                 ? 'bg-blue-600 text-white shadow-md'
                 : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
             }`}
@@ -287,15 +214,15 @@ export const StreamOptions: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto pb-12 flex flex-col gap-8" ref={playerContainerRef}>
-      {/* Full-Width Player Mode when playingUrl is active */}
-      {playingUrl ? (
+      {/* Full-Width Player Mode when a stream is selected (even if URL is still resolving) */}
+      {playingInfoHash ? (
         <div className="w-full flex flex-col gap-6">
           <div className="w-full bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl">
             <VideoPlayer
-              src={playingUrl}
+              src={playingUrl || ''}
               poster={poster}
-              durationHint={runtimeSeconds}
               infoHash={playingInfoHash}
+              imdbId={imdbId}
               onClose={() => dispatch(closePlayer())}
             />
           </div>
@@ -304,7 +231,7 @@ export const StreamOptions: React.FC = () => {
           <div className="flex items-center justify-between px-2">
             <div>
               <h1 className="text-xl font-bold text-white">{title}</h1>
-              <p className="text-xs text-gray-400">IMDB: {imdbId} {runtimeSeconds > 0 && `• ${Math.round(runtimeSeconds / 60)} min`}</p>
+              <p className="text-xs text-gray-400">IMDB: {imdbId}</p>
             </div>
             <button
               onClick={() => dispatch(closePlayer())}
@@ -340,7 +267,7 @@ export const StreamOptions: React.FC = () => {
           {/* Left Sidebar: Poster */}
           <div className="w-full md:w-1/3 flex flex-col gap-6">
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-xl sticky top-24">
-              <div className="relative aspect-[2/3] bg-gray-800">
+              <div className="relative aspect-[3/4] bg-gray-800">
                 {poster ? (
                   <img src={poster} alt={title} className="w-full h-full object-cover" />
                 ) : (
@@ -350,7 +277,7 @@ export const StreamOptions: React.FC = () => {
                 <div className="absolute bottom-0 left-0 p-6 w-full">
                   <h1 className="text-2xl font-bold text-white mb-2">{title}</h1>
                   <p className="text-gray-400 text-sm">
-                    IMDB ID: {imdbId} {runtimeSeconds > 0 && `• ${Math.round(runtimeSeconds / 60)} min`}
+                    IMDB ID: {imdbId}
                   </p>
                 </div>
               </div>

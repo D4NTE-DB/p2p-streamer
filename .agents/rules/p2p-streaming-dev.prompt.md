@@ -14,7 +14,7 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 
 ## Tech Stack
 
-- **Frontend:** React (Vite + TypeScript + React Compiler), Tailwind CSS, Lucide React icons
+- **Frontend:** React (Vite + TypeScript + React Compiler), Tailwind CSS, Lucide React icons, Vidstack (Media Player)
 - **Backend (local proxy):** Node.js, `webtorrent` (or `torrent-stream`), Node HTTP standard library
 - **Database/Auth:** Firebase (Auth, Firestore), Stripe (future Pro tiers)
 - **External integrations:** VLC Media Player (launched via native OS commands), Torrentio API, Stremio Cinemeta API
@@ -29,11 +29,12 @@ ${input:task:What do you need built or updated? (e.g. "the backend proxy", "the 
 
 The frontend codebase is organized to separate concerns, using React Router and Redux Toolkit.
 
-*   **`src/App.tsx`**: The Root application wrapper initializing Redux `<Provider>` and React Router `<BrowserRouter>`.
-*   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
-*   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation.
+*   **`src/App.tsx`**: The Root application wrapper initializing Redux `<Provider>`, React Router `<BrowserRouter>`, and the global proxy telemetry polling loop.
+*   **`src/store/`**: Contains Redux Toolkit slices (`authSlice`, `librarySlice`, `configSlice`, `playerSlice`, `telemetrySlice`, `searchSlice`) and async thunks (`libraryThunks`) managing global state and Firestore CRUD operations.
+*   **`src/layouts/`**: Contains the `MainLayout.tsx` which wraps pages with the collapsible Side Navigation and manages the global movie search bar via Redux.
 *   **`src/pages/`**: Dedicated route components (e.g., `Dashboard.tsx`, `StreamOptions.tsx`, `Login.tsx`).
-*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (handling HLS streams, loading reveals, Telemetry HUD overlay on hover, and Cinemeta duration hints), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx`.
+*   **`src/components/`**: Presentational (UI) React components. Key components include `VideoPlayer.tsx` (powered by Vidstack, handling loading reveals, Telemetry HUD overlay on hover, and playback analytics via `playerAnalytics.ts`), `StreamItem.tsx` (connects directly to Redux for zero prop-drilling, rendering seeders, size, tracker, and flag-tagged language pills), and `SystemStatusPanel.tsx` (consumes global telemetry).
+*   **`src/utils/`**: Utility functions like `streamParsers.ts` which handle complex string extraction (size, languages, subtitles) to keep components clean.
 
 *   **`src/firebase.ts`**: Handles the configuration and initialization of the Firebase SDK (Auth and Firestore) and validates the necessary environment variables.
 
@@ -54,6 +55,8 @@ Apply these rules to any code you generate for this project:
 
 ## Coding standards
 
+- **Dependency Management & Node Version:** The project relies on recent major versions of Vite (8.x) and WebTorrent (3.x) which require Node.js 22+. Avoid deleting `package-lock.json` and running a blind `npm install`, as unpinned updates can introduce native binding crashes (`EBADENGINE`) on older Node environments. Use `npm ci` when possible.
+- **Native Bindings (`node-datachannel`):** The server depends on `node-datachannel` (a C++ native addon) through the chain `webtorrent → @thaunknown/simple-peer → webrtc-polyfill → node-datachannel`. Its prebuilt binary (`build/Release/node_datachannel.node`) can silently fail to download during `npm install`, especially after deleting `package-lock.json` or switching branches. If `npm run dev:server` crashes with `Cannot find module '../../../build/Release/node_datachannel.node'`, fix it with `npm rebuild node-datachannel` or `cd node_modules/node-datachannel && npx prebuild-install -r napi`.
 - **TypeScript strictness:** precise interfaces for API responses (`TorrentioStream`) and Firestore documents (`LibraryItem`); never use `any`; handle missing/inconsistent Torrentio fields gracefully. All types are centralized in `src/types.ts`.
 - **Firebase Interaction:** All Firestore operations (CRUD for the `library` collection) are user-specific, scoped to `users/{userId}/library`. Authentication is handled via Firebase Email/Password Authentication.
 - **React Compiler compatibility:** don't hand-write `useMemo`/`useCallback` unless a third-party library specifically requires it — assume the compiler handles memoization.

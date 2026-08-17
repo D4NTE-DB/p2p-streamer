@@ -1,8 +1,11 @@
+@import '@vidstack/react/player/styles/base.css';
+@import '@vidstack/react/player/styles/default/theme.css';
+@import '@vidstack/react/player/styles/default/layouts/video.css';
+
 /* @tailwind directives */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
 
 :root {
   --text: #6b6375;
@@ -114,19 +117,6 @@ code {
   line-height: 135%;
   padding: 4px 8px;
   background: var(--code-bg);
-}
-
-@keyframes posterReveal {
-  0% {
-    clip-path: inset(0 0 0 0);
-  }
-  100% {
-    clip-path: inset(0 0 0 100%);
-  }
-}
-
-.animate-poster-reveal {
-  animation: posterReveal 4s ease-in-out forwards;
 }
 
 .animate-poster-done {

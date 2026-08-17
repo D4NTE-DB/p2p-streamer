@@ -4,6 +4,7 @@ import { MonitorPlay, Home, Settings, Search as SearchIcon, LogOut, ChevronLeft,
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '../store';
 import { toggleSidebar } from '../store/configSlice';
+import { setSearchQuery, setSearchResults, setIsSearching, setShowDropdown, clearSearch } from '../store/searchSlice';
 import { logout } from '../store/authSlice';
 import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
@@ -17,41 +18,36 @@ export const MainLayout: React.FC = () => {
   const { sidebarCollapsed } = useSelector((state: RootState) => state.config);
 
   // Global Search State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<CinemetaMovie[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
+  const { searchQuery, searchResults, isSearching, showDropdown } = useSelector((state: RootState) => state.search);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<any>(null);
 
   // Handle Search Input Change with Debounce
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const query = e.target.value;
-    setSearchQuery(query);
+    dispatch(setSearchQuery(query));
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (!query.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      setShowDropdown(false);
+      dispatch(clearSearch());
       return;
     }
 
-    setIsSearching(true);
-    setShowDropdown(true);
+    dispatch(setIsSearching(true));
+    dispatch(setShowDropdown(true));
 
     debounceRef.current = setTimeout(async () => {
       try {
         const res = await fetch(`${CINEMETA_API_URL}/catalog/movie/top/search=${encodeURIComponent(query)}.json`);
         if (res.ok) {
           const data = await res.json();
-          setSearchResults((data.metas || []).slice(0, 8));
+          dispatch(setSearchResults((data.metas || []).slice(0, 8)));
         }
       } catch (err) {
         console.error("Search failed:", err);
       } finally {
-        setIsSearching(false);
+        dispatch(setIsSearching(false));
       }
     }, 350);
   };
@@ -60,13 +56,13 @@ export const MainLayout: React.FC = () => {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
-        setShowDropdown(false);
+        dispatch(setShowDropdown(false));
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setShowDropdown(false);
+        dispatch(setShowDropdown(false));
       }
     };
 
@@ -79,8 +75,7 @@ export const MainLayout: React.FC = () => {
   }, []);
 
   const handleSelectMovie = (movie: CinemetaMovie) => {
-    setShowDropdown(false);
-    setSearchQuery('');
+    dispatch(clearSearch());
     navigate(`/stream/${movie.id}?title=${encodeURIComponent(movie.name)}&poster=${encodeURIComponent(movie.poster || '')}`);
   };
 
@@ -103,7 +98,7 @@ export const MainLayout: React.FC = () => {
     <div className="flex h-screen bg-gray-950 text-gray-200 overflow-hidden font-sans">
       
       {/* Side Navigation */}
-      <aside className={`bg-gray-900 border-r border-gray-800 transition-all duration-300 flex flex-col ${sidebarCollapsed ? 'w-20' : 'w-64'}`}>
+      <aside className={`bg-gray-900 border-r border-gray-800 transition-all duration-300 flex flex-col ${sidebarCollapsed ? 'w-12' : 'w-64'}`}>
         {/* Logo Area */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-gray-800">
           {!sidebarCollapsed && (
@@ -174,14 +169,14 @@ export const MainLayout: React.FC = () => {
                 placeholder="Search movies by title..."
                 value={searchQuery}
                 onChange={handleSearchChange}
-                onFocus={() => searchQuery.trim() && setShowDropdown(true)}
+                onFocus={() => searchQuery.trim() && dispatch(setShowDropdown(true))}
                 className="w-full bg-gray-950/80 border border-gray-800 text-gray-200 text-sm rounded-full pl-10 pr-10 py-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
               />
               {isSearching ? (
                 <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-3.5" />
               ) : searchQuery ? (
                 <button 
-                  onClick={() => { setSearchQuery(''); setSearchResults([]); setShowDropdown(false); }} 
+                  onClick={() => dispatch(clearSearch())} 
                   className="absolute right-3.5 text-gray-500 hover:text-gray-300"
                 >
                   <X className="w-4 h-4" />
@@ -236,7 +231,7 @@ export const MainLayout: React.FC = () => {
                 <span className="ml-2 px-2 py-0.5 bg-yellow-500/10 text-yellow-500 rounded text-xs font-semibold">PRO</span>
               </div>
             ) : (
-              <NavLink to="/login" className="text-sm font-medium text-blue-400 hover:text-blue-300">
+              <NavLink to="/login" className="text-sm font-medium text-blue-400 hover:text-blue-300 w-max">
                 Sign In
               </NavLink>
             )}

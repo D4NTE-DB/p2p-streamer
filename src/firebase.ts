@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getAnalytics } from 'firebase/analytics';
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -33,3 +34,4 @@ export const firebaseConfigValid = firebaseConfigValidationMessages.length === 0
 const app = firebaseConfigValid ? initializeApp(firebaseConfig) : undefined;
 export const auth = app ? getAuth(app) : undefined;
 export const db = app ? getFirestore(app) : undefined;
+export const analytics = app && typeof window !== 'undefined' ? getAnalytics(app) : undefined;

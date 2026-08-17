@@ -1,21 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Hls from 'hls.js';
-import { X, AlertTriangle, Activity, Wifi, ArrowDown, ArrowUp } from 'lucide-react';
+import { MediaPlayer, MediaProvider, Track, useMediaState, useMediaRemote, type MediaPlayerInstance } from '@vidstack/react';
+import { DefaultVideoLayout, defaultLayoutIcons } from '@vidstack/react/player/layouts/default';
+import { X, AlertTriangle, Activity, Wifi, ArrowDown, ArrowUp, Server } from 'lucide-react';
+import { logPlaybackEvent } from '../utils/playerAnalytics';
+import { SystemStatusPanel } from './SystemStatusPanel';
+import { useSelector, useDispatch } from 'react-redux';
+import type { RootState, AppDispatch } from '../store';
+import { fetchSubtitles, clearSubtitles, setSubtitleOffset } from '../store/subtitleSlice';
+import { PROXY_BASE_URL } from '../constants';
+import { shiftVttTimestamps } from '../utils/vttParser';
 
 interface VideoPlayerProps {
   src: string;
   poster?: string;
-  durationHint?: number; // Total duration in seconds from Cinemeta
   infoHash?: string; // For telemetry fetching
+  imdbId?: string; // For OpenSubtitles fetching
   onClose?: () => void;
-}
-
-interface TelemetryItem {
-  infoHash: string;
-  downloadSpeed: string;
-  uploadSpeed: string;
-  progress: string;
-  numPeers: number;
 }
 
 function formatSeconds(totalSeconds: number): string {
@@ -29,166 +29,180 @@ function formatSeconds(totalSeconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-export const VideoPlayer: React.FC<VideoPlayerProps> = ({
-  src,
+// Helper to determine the correct Vidstack source type based on URL or extension
+function getSrcObject(sourceUrl: string) {
+  if (!sourceUrl) return sourceUrl;
+  
+  const urlLower = sourceUrl.toLowerCase();
+  
+  // Native HLS/DASH Playlists
+  if (urlLower.includes('.m3u8')) return { src: sourceUrl, type: 'application/x-mpegurl' };
+  if (urlLower.includes('.mpd')) return { src: sourceUrl, type: 'application/dash+xml' };
+  
+  // Common Video Containers
+  if (urlLower.includes('.mkv')) return { src: sourceUrl, type: 'video/x-matroska' };
+  if (urlLower.includes('.avi')) return { src: sourceUrl, type: 'video/x-msvideo' };
+  if (urlLower.includes('.mp4')) return { src: sourceUrl, type: 'video/mp4' };
+  if (urlLower.includes('.webm')) return { src: sourceUrl, type: 'video/webm' };
+  if (urlLower.includes('.ogg') || urlLower.includes('.ogv')) return { src: sourceUrl, type: 'video/ogg' };
+  
+  // Fallback for our proxy endpoints without explicit extensions
+  if (urlLower.includes('/stream/')) return sourceUrl; // Let Vidstack infer from Content-Type header
+  
+  return sourceUrl;
+}
+
+interface SubtitleTrackProps {
+  fileId: number;
+  label: string;
+  language: string;
+  isDefault: boolean;
+  offsetSeconds: number;
+}
+
+const SubtitleTrack: React.FC<SubtitleTrackProps> = ({ fileId, label, language, isDefault, offsetSeconds }) => {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let url = '';
+
+    fetch(`${PROXY_BASE_URL}/api/subtitles/download/${fileId}`)
+      .then((res) => res.text())
+      .then((text) => {
+        if (!active) return;
+        const shiftedText = shiftVttTimestamps(text, offsetSeconds);
+        const blob = new Blob([shiftedText], { type: 'text/vtt' });
+        url = URL.createObjectURL(blob);
+        setBlobUrl(url);
+      })
+      .catch((err) => console.error(`Failed to load subtitle ${fileId}:`, err));
+
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [fileId, offsetSeconds]);
+
+  if (!blobUrl) return null;
+
+  return (
+    <Track
+      src={blobUrl}
+      kind="subtitles"
+      label={label}
+      language={language}
+      type="vtt"
+      default={isDefault}
+    />
+  );
+};
+
+interface PlayerOverlaysProps {
+  poster?: string;
+  infoHash?: string;
+  onClose?: () => void;
+}
+
+// Embedded Player Overlays component sitting INSIDE <MediaPlayer> to inherit Vidstack Context and Fullscreen scope
+const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
   poster,
-  durationHint,
   infoHash,
   onClose,
 }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [revealComplete, setRevealComplete] = useState(false);
+  // Read state directly from Vidstack Media Context (zero manual event listeners or parent re-renders)
+  const remote = useMediaRemote();
+  const currentTime = useMediaState('currentTime');
+  const duration = useMediaState('duration');
+  const canPlay = useMediaState('canPlay');
+  const playing = useMediaState('playing');
+  const error = useMediaState('error');
+  const videoWidth = useMediaState('mediaWidth'); // Using mediaWidth to detect missing video
+
+  const isLoading = !canPlay && !playing;
+  const hasError = !!error;
+  let errorMessage = error?.message || 'An unknown error occurred during playback.';
+  
+  if (errorMessage.includes('hlsError')) {
+    errorMessage = 'Torrent is dead or timed out. No seeders could be found for this stream.';
+  }
+
+  const [revealProgress, setRevealProgress] = useState(0);
   const [isFadingOut, setIsFadingOut] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [showProxyPanel, setShowProxyPanel] = useState(false);
+  const [showCodecWarning, setShowCodecWarning] = useState(false);
 
-  // Timeline tracking
-  const [currentTime, setCurrentTime] = useState(0);
-  const [nativeDuration, setNativeDuration] = useState<number>(0);
+  // Telemetry HUD state from Redux
+  const dispatch = useDispatch<AppDispatch>();
+  const globalStats = useSelector((state: RootState) => state.telemetry.stats);
+  const telemetry = globalStats?.torrents?.find((t) => t.infoHash === infoHash) || 
+                   (globalStats?.torrents?.length ? globalStats.torrents[globalStats.torrents.length - 1] : null);
 
-  // Telemetry HUD state
-  const [telemetry, setTelemetry] = useState<TelemetryItem | null>(null);
+  const { subtitleOffset, activeFileId } = useSelector((state: RootState) => state.subtitles);
 
+  const proxyDuration = telemetry?.durationSeconds ?? null;
+
+  // Override Vidstack's internal duration state if native stream reports Infinity or 0
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src) return;
-
-    setIsLoading(true);
-    setRevealComplete(false);
-    setIsFadingOut(false);
-    setShowOverlay(true);
-    setHasError(false);
-    setErrorMessage('');
-    setCurrentTime(0);
-    setNativeDuration(0);
-
-    let hls: Hls | null = null;
-    const isHlsUrl = src.includes('.m3u8') || src.includes('/hls-stream/') || src.includes('/cmaf-stream/');
-
-    if (isHlsUrl && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
-      hls.loadSource(src);
-      hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => {});
-      });
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.error("[HLS] Network error, attempting recovery...");
-              hls?.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.error("[HLS] Media error, attempting recovery...");
-              hls?.recoverMediaError();
-              break;
-            default:
-              setHasError(true);
-              setErrorMessage('Fatal HLS streaming error');
-              hls?.destroy();
-              break;
-          }
-        }
-      });
-    } else if (isHlsUrl && video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src;
-    } else {
-      video.src = src;
+    if (
+      remote &&
+      proxyDuration &&
+      proxyDuration > 0 &&
+      (!isFinite(duration) || duration === 0)
+    ) {
+      remote.changeDuration(proxyDuration);
     }
+  }, [remote, proxyDuration, duration]);
 
-    const handleCanPlay = () => setIsLoading(false);
-    const handlePlaying = () => setIsLoading(false);
-    const handleTimeUpdate = () => {
-      if (video) {
-        setCurrentTime(video.currentTime || 0);
-        if (video.duration && isFinite(video.duration)) {
-          setNativeDuration(video.duration);
-        }
-      }
-    };
-    const handleError = () => {
-      setHasError(true);
-      setErrorMessage('Failed to load video stream');
-      setIsLoading(false);
-    };
-
-    video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('playing', handlePlaying);
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('error', handleError);
-
-    return () => {
-      if (hls) {
-        hls.destroy();
-      }
-      video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('playing', handlePlaying);
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('error', handleError);
-    };
-  }, [src]);
-
-  // Telemetry stats polling
+  // Real progress from telemetry
   useEffect(() => {
-    let isMounted = true;
-    const fetchTelemetry = () => {
-      fetch('http://localhost:8888/stats')
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!isMounted || !data?.torrents) return;
-          const matched =
-            data.torrents.find((t: any) => t.infoHash === infoHash) ||
-            data.torrents[data.torrents.length - 1];
-          if (matched) {
-            setTelemetry({
-              infoHash: matched.infoHash,
-              downloadSpeed: matched.downloadSpeed || '0 B/s',
-              uploadSpeed: matched.uploadSpeed || '0 B/s',
-              progress: matched.progress || '0',
-              numPeers: matched.numPeers || 0,
-            });
-          }
-        })
-        .catch(() => {
-          if (isMounted) setTelemetry(null);
-        });
-    };
-
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 2500);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [infoHash]);
+    if (isLoading && telemetry?.progress) {
+      const realProgress = parseFloat(telemetry.progress);
+      setRevealProgress(Math.min(95, realProgress));
+    } else if (!isLoading) {
+      setRevealProgress(100);
+    }
+  }, [isLoading, telemetry?.progress]);
 
   // Smooth overlay fade-out when loading and reveal complete
   useEffect(() => {
-    if (!isLoading && revealComplete && showOverlay && !isFadingOut) {
-      setIsFadingOut(true);
+    if (revealProgress >= 95 && showOverlay && !isFadingOut) {
       const timer = setTimeout(() => {
-        setShowOverlay(false);
-      }, 650);
+        setIsFadingOut(true);
+        setTimeout(() => setShowOverlay(false), 650);
+      }, 300); // Give the wipe a moment to finish visually
       return () => clearTimeout(timer);
     }
-  }, [isLoading, revealComplete, showOverlay, isFadingOut]);
+  }, [revealProgress, showOverlay, isFadingOut]);
 
-  // Determine if we should use the custom Cinemeta duration timeline
-  const effectiveDuration = nativeDuration > 60 ? nativeDuration : (durationHint && durationHint > 60 ? durationHint : 0);
-  const showCustomTimeline = effectiveDuration > 0 && (nativeDuration <= 60 || !isFinite(nativeDuration));
-  const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
+  // Safety net: force dismiss overlay after 15s regardless of state
+  useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      if (showOverlay) {
+        setIsFadingOut(true);
+        setTimeout(() => setShowOverlay(false), 650);
+      }
+    }, 15000);
+    return () => clearTimeout(safetyTimer);
+  }, []); // Empty deps, only run on mount
+
+  // Playback health check: If playing for 8 seconds but no video frames (width === 0)
+  useEffect(() => {
+    if (playing && videoWidth === 0 && !showOverlay) {
+      const healthTimer = setTimeout(() => {
+        // If still playing and no video width after 8 seconds
+        setShowCodecWarning(true);
+      }, 8000);
+      return () => clearTimeout(healthTimer);
+    } else if (videoWidth > 0) {
+      setShowCodecWarning(false);
+    }
+  }, [playing, videoWidth, showOverlay]);
 
   return (
-    <div className="w-full bg-black aspect-video flex flex-col relative group rounded-xl overflow-hidden shadow-2xl border border-gray-800">
-      {/* Telemetry HUD Overlay (Visible on Hover at Top Left) */}
+    <>
+      {/* Telemetry HUD Overlay (Natively embedded inside MediaPlayer, visible in Fullscreen!) */}
       {telemetry && (
         <div className="absolute top-3 left-3 z-30 flex items-center gap-3.5 px-3.5 py-2 rounded-xl bg-black/80 backdrop-blur-md border border-white/10 text-xs font-mono text-gray-200 shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
           <div className="flex items-center gap-1 text-blue-400 font-bold">
@@ -210,42 +224,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Video Element */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-contain"
-        controls
-        autoPlay
-        playsInline
-      />
-
-      {/* Custom Progress Bar Overlay (For transcoded live streams with Cinemeta hint) */}
-      {showCustomTimeline && !showOverlay && (
-        <div 
-          className="absolute bottom-11 left-4 right-4 z-20 flex flex-col gap-1 pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-          title="Progress calculated from Cinemeta movie runtime. Seeking disabled on live transcode."
-        >
-          <div className="flex justify-between items-center text-[11px] font-mono text-gray-200 font-bold drop-shadow-md">
-            <span className="bg-black/60 px-2 py-0.5 rounded border border-white/10">
-              {formatSeconds(currentTime)}
-            </span>
-            <span className="bg-black/60 px-2 py-0.5 rounded border border-white/10 text-blue-400">
-              {formatSeconds(effectiveDuration)} (Cinemeta)
-            </span>
-          </div>
-          <div className="w-full h-1.5 bg-gray-900/80 backdrop-blur rounded-full overflow-hidden border border-white/10 shadow-inner">
-            <div
-              className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
+      {/* Codec Warning Banner */}
+      {showCodecWarning && (
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-3 rounded-lg bg-red-500/90 backdrop-blur-md border border-red-400 text-white shadow-lg animate-in fade-in slide-in-from-top-4">
+          <AlertTriangle className="w-5 h-5" />
+          <span className="text-sm font-medium">
+            This stream's video codec may not be supported by your browser. Try the VLC option for full compatibility.
+          </span>
+          <button 
+            onClick={() => setShowCodecWarning(false)}
+            className="ml-2 text-white/80 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
       {/* Loading Overlay with Progress Reveal */}
       {showOverlay && !hasError && (
         <div
-          className={`absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-950 overflow-hidden ${
+          className={`absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-950 overflow-hidden pointer-events-none ${
             isFadingOut ? 'animate-poster-done' : ''
           }`}
         >
@@ -253,17 +251,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="absolute inset-0 w-full h-full">
               {/* Sharp Base Poster Layer */}
               <div
-                className={`absolute inset-0 bg-cover bg-center scale-105 ${
-                  revealComplete && isLoading ? 'animate-pulse' : ''
-                }`}
+                className="absolute inset-0 bg-cover bg-center scale-105"
                 style={{ backgroundImage: `url(${poster})` }}
               />
 
-              {/* Animated Blur Cover (Single-run Left-to-Right Reveal) */}
+              {/* Blur Cover (Left-to-Right Wipe matching load state) */}
               <div
-                onAnimationEnd={() => setRevealComplete(true)}
-                className="absolute inset-0 bg-cover bg-center scale-105 backdrop-blur-xl animate-poster-reveal"
-                style={{ backgroundImage: `url(${poster})`, filter: 'blur(24px)' }}
+                className="absolute inset-0 bg-cover bg-center scale-105 backdrop-blur-xl transition-all duration-[150ms] ease-out"
+                style={{ 
+                  backgroundImage: `url(${poster})`, 
+                  filter: 'blur(24px)',
+                  clipPath: `inset(0 0 0 ${revealProgress}%)`
+                }}
               />
 
               <div className="absolute inset-0 bg-black/40" />
@@ -275,10 +274,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Bottom Progress Text Label */}
           <div className="absolute bottom-6 z-20 px-4 py-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-center shadow-xl">
             <span className="text-white font-medium text-xs tracking-wide">
-              {!revealComplete
-                ? 'Buffering stream...'
-                : isLoading
-                ? 'Almost ready...'
+              {revealProgress < 100
+                ? `Buffering stream... ${Math.round(revealProgress)}%`
                 : 'Stream complete! Loading player...'}
             </span>
           </div>
@@ -287,10 +284,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Error Overlay */}
       {hasError && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 backdrop-blur-md p-6 text-center">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-950/90 backdrop-blur-md p-6 text-center pointer-events-auto">
           <AlertTriangle className="w-12 h-12 text-red-500 mb-3" />
           <h3 className="text-white font-bold text-lg mb-1">Playback Error</h3>
-          <p className="text-gray-400 text-sm max-w-xs mb-4">{errorMessage || 'Unable to play this stream.'}</p>
+          <p className="text-gray-400 text-sm max-w-xs mb-4">{errorMessage}</p>
           {onClose && (
             <button
               onClick={onClose}
@@ -302,16 +299,188 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
+      {/* Subtitle Sync Controls */}
+      {activeFileId && (
+        <div className="absolute top-3 right-28 z-30 flex items-center bg-black/70 backdrop-blur-md rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-auto">
+          <button
+            onClick={() => dispatch(setSubtitleOffset(subtitleOffset - 0.25))}
+            className="px-3 py-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-l-full font-mono text-sm"
+            title="Delay Subtitles (-0.25s)"
+          >
+            -
+          </button>
+          <div className="px-2 py-1.5 text-xs font-medium text-gray-300 border-x border-white/10 min-w-[70px] text-center pointer-events-none">
+            Sync: {subtitleOffset > 0 ? '+' : ''}{subtitleOffset.toFixed(2)}s
+          </div>
+          <button
+            onClick={() => dispatch(setSubtitleOffset(subtitleOffset + 0.25))}
+            className="px-3 py-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-r-full font-mono text-sm"
+            title="Advance Subtitles (+0.25s)"
+          >
+            +
+          </button>
+        </div>
+      )}
+
+      {/* Local Proxy Engine Button */}
+      <button
+        onClick={() => setShowProxyPanel(prev => !prev)}
+        className={`absolute top-3 right-14 z-30 p-2 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity border pointer-events-auto ${
+          showProxyPanel ? 'bg-blue-600 border-blue-400' : 'bg-black/70 hover:bg-black border-white/10'
+        }`}
+        title="Local Proxy Engine"
+      >
+        <Server className="w-5 h-5" />
+      </button>
+
       {/* Close Button */}
       {onClose && (
         <button
           onClick={onClose}
-          className="absolute top-3 right-3 z-30 bg-black/70 hover:bg-black p-2 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity border border-white/10"
+          className="absolute top-3 right-3 z-30 bg-black/70 hover:bg-black p-2 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-auto"
           title="Close Player"
         >
           <X className="w-5 h-5" />
         </button>
       )}
+
+      {/* Proxy Engine Panel */}
+      {showProxyPanel && (
+        <div className="absolute top-14 right-3 w-80 z-40 pointer-events-auto animate-in slide-in-from-top-2 fade-in duration-200">
+          <SystemStatusPanel />
+        </div>
+      )}
+    </>
+  );
+};
+
+export const VideoPlayer: React.FC<VideoPlayerProps> = ({
+  src,
+  poster,
+  infoHash,
+  imdbId,
+  onClose,
+}) => {
+  const dispatch = useDispatch<AppDispatch>();
+  const playerRef = useRef<MediaPlayerInstance>(null);
+  const { audioLanguage, subtitleLanguage, requireSubtitles } = useSelector((state: RootState) => state.config);
+  const { tracks: subtitleTracks, activeFileId, subtitleOffset } = useSelector((state: RootState) => state.subtitles);
+
+  // Fetch OpenSubtitles when imdbId changes
+  useEffect(() => {
+    if (imdbId) {
+      dispatch(fetchSubtitles({ imdbId, lang: subtitleLanguage }));
+    } else {
+      dispatch(clearSubtitles());
+    }
+
+    return () => {
+      dispatch(clearSubtitles());
+    };
+  }, [imdbId, subtitleLanguage, dispatch]);
+
+  useEffect(() => {
+    logPlaybackEvent({
+      type: 'play',
+      infoHash,
+      timestamp: Date.now(),
+      detail: { src, poster },
+    });
+  }, [src, infoHash, poster]);
+
+  useEffect(() => {
+    if (!playerRef.current) return;
+    const player = playerRef.current;
+    
+    const unsub = player.subscribe(({ audioTracks, textTracks }) => {
+      if (audioLanguage && audioLanguage !== 'all' && audioTracks.length > 0) {
+        const track = audioTracks.find(t => t.language?.toLowerCase().includes(audioLanguage));
+        if (track) track.selected = true;
+      }
+      if (requireSubtitles && textTracks.length > 0) {
+        const textTrack = textTracks.find(t => t.kind === 'subtitles' || t.kind === 'captions');
+        if (textTrack && textTrack.mode !== 'showing') {
+          textTrack.mode = 'showing';
+        }
+      }
+    });
+    
+    return unsub;
+  }, [audioLanguage, requireSubtitles]);
+
+  return (
+    <div className="w-full bg-black aspect-video flex flex-col relative group rounded-xl overflow-hidden shadow-2xl border border-gray-800">
+      {/* Vidstack Media Player Container */}
+      <MediaPlayer
+        ref={playerRef}
+        src={getSrcObject(src)}
+        poster={poster}
+        aspectRatio="16/9"
+        autoplay
+        playsInline
+        load="eager"
+        onPlaying={() => {
+          logPlaybackEvent({
+            type: 'play',
+            infoHash,
+            timestamp: Date.now(),
+          });
+        }}
+        onPause={(e) => {
+          logPlaybackEvent({
+            type: 'pause',
+            infoHash,
+            currentTime: playerRef.current?.currentTime,
+            duration: playerRef.current?.duration,
+            timestamp: Date.now(),
+          });
+        }}
+        onEnded={(e) => {
+          logPlaybackEvent({
+            type: 'ended',
+            infoHash,
+            duration: playerRef.current?.duration,
+            timestamp: Date.now(),
+          });
+        }}
+        onWaiting={() => {
+          logPlaybackEvent({
+            type: 'buffering',
+            infoHash,
+            timestamp: Date.now(),
+          });
+        }}
+        onError={(e) => {
+          logPlaybackEvent({
+            type: 'error',
+            infoHash,
+            timestamp: Date.now(),
+            detail: { error: e?.detail },
+          });
+        }}
+        className="w-full h-full object-contain"
+      >
+        <MediaProvider>
+          {subtitleTracks.map((sub, idx) => (
+            <SubtitleTrack
+              key={sub.fileId}
+              fileId={sub.fileId}
+              label={sub.label}
+              language={sub.language}
+              isDefault={requireSubtitles && (activeFileId === sub.fileId || (!activeFileId && idx === 0))}
+              offsetSeconds={subtitleOffset}
+            />
+          ))}
+        </MediaProvider>
+        <DefaultVideoLayout icons={defaultLayoutIcons} />
+        
+        {/* Natively embedded overlays inside Vidstack player context */}
+        <PlayerOverlays
+          poster={poster}
+          infoHash={infoHash}
+          onClose={onClose}
+        />
+      </MediaPlayer>
     </div>
   );
 };
