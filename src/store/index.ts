@@ -5,6 +5,7 @@ import configReducer from './configSlice';
 import playerReducer from './playerSlice';
 import telemetryReducer from './telemetrySlice';
 import searchReducer from './searchSlice';
+import subtitleReducer from './subtitleSlice';
 
 export const store = configureStore({
   reducer: {
@@ -14,6 +15,7 @@ export const store = configureStore({
     player: playerReducer,
     telemetry: telemetryReducer,
     search: searchReducer,
+    subtitles: subtitleReducer,
   },
   middleware: (getDefaultMiddleware) => 
     getDefaultMiddleware({

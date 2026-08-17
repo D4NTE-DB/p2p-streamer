@@ -53,3 +53,11 @@ export interface CinemetaMovie {
   type?: string;
   runtime?: string;
 }
+
+export interface SubtitleTrack {
+  fileId: number;
+  label: string;
+  language: string;
+  downloadCount: number;
+  hearingImpaired: boolean;
+}

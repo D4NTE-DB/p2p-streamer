@@ -98,7 +98,7 @@ export const MainLayout: React.FC = () => {
     <div className="flex h-screen bg-gray-950 text-gray-200 overflow-hidden font-sans">
       
       {/* Side Navigation */}
-      <aside className={`bg-gray-900 border-r border-gray-800 transition-all duration-300 flex flex-col ${sidebarCollapsed ? 'w-20' : 'w-64'}`}>
+      <aside className={`bg-gray-900 border-r border-gray-800 transition-all duration-300 flex flex-col ${sidebarCollapsed ? 'w-12' : 'w-64'}`}>
         {/* Logo Area */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-gray-800">
           {!sidebarCollapsed && (
@@ -231,7 +231,7 @@ export const MainLayout: React.FC = () => {
                 <span className="ml-2 px-2 py-0.5 bg-yellow-500/10 text-yellow-500 rounded text-xs font-semibold">PRO</span>
               </div>
             ) : (
-              <NavLink to="/login" className="text-sm font-medium text-blue-400 hover:text-blue-300">
+              <NavLink to="/login" className="text-sm font-medium text-blue-400 hover:text-blue-300 w-max">
                 Sign In
               </NavLink>
             )}

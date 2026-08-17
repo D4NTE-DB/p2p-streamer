@@ -6,19 +6,21 @@ interface ConfigState {
   selectedQualities: Record<string, boolean>;
   maxSizeGb: number;
   audioLanguage: string;
+  subtitleLanguage: string;
   requireSubtitles: boolean;
 }
 
 const initialState: ConfigState = {
-  sidebarCollapsed: false,
+  sidebarCollapsed: true,
   selectedQualities: {
-    '4K': true,
+    '4K': false,
     '1080p': true,
-    '720p': false,
+    '720p': true,
     'SD/Other': true
   },
-  maxSizeGb: 10,
+  maxSizeGb: 5,
   audioLanguage: 'all',
+  subtitleLanguage: 'en',
   requireSubtitles: false
 };
 
@@ -45,11 +47,23 @@ export const configSlice = createSlice({
     setAudioLanguage: (state, action: PayloadAction<string>) => {
       state.audioLanguage = action.payload;
     },
+    setSubtitleLanguage: (state, action: PayloadAction<string>) => {
+      state.subtitleLanguage = action.payload;
+    },
     setRequireSubtitles: (state, action: PayloadAction<boolean>) => {
       state.requireSubtitles = action.payload;
     }
   },
 });
 
-export const { toggleSidebar, setSidebarCollapsed, toggleQuality, setQualities, setMaxSizeGb, setAudioLanguage, setRequireSubtitles } = configSlice.actions;
+export const {
+  toggleSidebar,
+  setSidebarCollapsed,
+  toggleQuality,
+  setQualities,
+  setMaxSizeGb,
+  setAudioLanguage,
+  setSubtitleLanguage,
+  setRequireSubtitles
+} = configSlice.actions;
 export default configSlice.reducer;

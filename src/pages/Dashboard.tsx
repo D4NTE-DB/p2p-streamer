@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, TrendingUp } from 'lucide-react';
-import { CINEMETA_API_URL } from '../constants';
+import { Loader2, TrendingUp, Subtitles } from 'lucide-react';
+import { CINEMETA_API_URL, PROXY_BASE_URL } from '../constants';
 
 import type { CinemetaMovie } from '../types';
 import { useSelector } from 'react-redux';
@@ -12,6 +12,7 @@ export const Dashboard: React.FC = () => {
   const [movies, setMovies] = useState<CinemetaMovie[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [cachedSubIds, setCachedSubIds] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
   const recentStreams = useSelector((state: RootState) => state.player.recentStreams);
 
@@ -30,6 +31,23 @@ export const Dashboard: React.FC = () => {
     };
 
     fetchTopMovies();
+  }, []);
+
+  useEffect(() => {
+    const fetchCachedSubtitles = async () => {
+      try {
+        const res = await fetch(`${PROXY_BASE_URL}/api/subtitles/cache-stats`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.cache?.cachedImdbIds)) {
+            setCachedSubIds(new Set(data.cache.cachedImdbIds));
+          }
+        }
+      } catch {
+        // Non-critical, fail gracefully
+      }
+    };
+    fetchCachedSubtitles();
   }, []);
 
   if (loading) {
@@ -64,7 +82,7 @@ export const Dashboard: React.FC = () => {
                 onClick={() => navigate(`/stream/${stream.imdbId}?title=${encodeURIComponent(stream.title)}&poster=${encodeURIComponent(stream.poster || '')}`)}
                 className="group relative rounded-xl overflow-hidden cursor-pointer bg-gray-900 border border-gray-800 transition-all hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/10 hover:-translate-y-1"
               >
-                <div className="aspect-[2/3] w-full bg-gray-800 relative">
+                <div className="aspect-[3/4] w-full bg-gray-800 relative">
                   {stream.poster ? (
                     <img 
                       src={stream.poster} 
@@ -75,6 +93,16 @@ export const Dashboard: React.FC = () => {
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-600 font-bold p-4 text-center">
                       {stream.title}
+                    </div>
+                  )}
+                  {/* Subtitles Badge */}
+                  {stream.imdbId && cachedSubIds.has(stream.imdbId) && (
+                    <div 
+                      className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-gray-950/80 backdrop-blur border border-blue-500/40 text-blue-400 text-[10px] font-bold px-1.5 py-0.5 rounded shadow"
+                      title="Subtitles Available"
+                    >
+                      <Subtitles className="w-3 h-3" />
+                      CC
                     </div>
                   )}
                   {/* Play Overlay */}
@@ -117,6 +145,16 @@ export const Dashboard: React.FC = () => {
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-gray-600 font-bold p-4 text-center">
                   {movie.name}
+                </div>
+              )}
+              {/* Subtitles Badge */}
+              {cachedSubIds.has(movie.id) && (
+                <div 
+                  className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-gray-950/80 backdrop-blur border border-blue-500/40 text-blue-400 text-[10px] font-bold px-1.5 py-0.5 rounded shadow"
+                  title="Subtitles Available"
+                >
+                  <Subtitles className="w-3 h-3" />
+                  CC
                 </div>
               )}
               {/* Play Overlay */}

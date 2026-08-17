@@ -13,7 +13,7 @@ export const SuggestionPanel: React.FC<SuggestionPanelProps> = ({ posterUrl, mov
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
       <h2 className="text-base font-semibold mb-4 text-gray-200">Suggested Media</h2>
-      <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden group shadow-lg">
+      <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden group shadow-lg">
         <img 
           src={posterUrl} 
           alt={`Poster for ${movieTitle}`} 
