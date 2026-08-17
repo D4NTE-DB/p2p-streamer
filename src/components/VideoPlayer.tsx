@@ -1,16 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { MediaPlayer, MediaProvider, useMediaState, useMediaRemote, type MediaPlayerInstance } from '@vidstack/react';
+import { MediaPlayer, MediaProvider, Track, useMediaState, useMediaRemote, type MediaPlayerInstance } from '@vidstack/react';
 import { DefaultVideoLayout, defaultLayoutIcons } from '@vidstack/react/player/layouts/default';
 import { X, AlertTriangle, Activity, Wifi, ArrowDown, ArrowUp, Server } from 'lucide-react';
 import { logPlaybackEvent } from '../utils/playerAnalytics';
 import { SystemStatusPanel } from './SystemStatusPanel';
-import { useSelector } from 'react-redux';
-import type { RootState } from '../store';
+import { useSelector, useDispatch } from 'react-redux';
+import type { RootState, AppDispatch } from '../store';
+import { fetchSubtitles, clearSubtitles, setSubtitleOffset } from '../store/subtitleSlice';
+import { PROXY_BASE_URL } from '../constants';
+import { shiftVttTimestamps } from '../utils/vttParser';
 
 interface VideoPlayerProps {
   src: string;
   poster?: string;
   infoHash?: string; // For telemetry fetching
+  imdbId?: string; // For OpenSubtitles fetching
   onClose?: () => void;
 }
 
@@ -43,10 +47,56 @@ function getSrcObject(sourceUrl: string) {
   if (urlLower.includes('.ogg') || urlLower.includes('.ogv')) return { src: sourceUrl, type: 'video/ogg' };
   
   // Fallback for our proxy endpoints without explicit extensions
-  if (urlLower.includes('/stream/')) return { src: sourceUrl, type: 'video/mp4' };
+  if (urlLower.includes('/stream/')) return sourceUrl; // Let Vidstack infer from Content-Type header
   
-  return sourceUrl; // Let Vidstack infer
+  return sourceUrl;
 }
+
+interface SubtitleTrackProps {
+  fileId: number;
+  label: string;
+  language: string;
+  isDefault: boolean;
+  offsetSeconds: number;
+}
+
+const SubtitleTrack: React.FC<SubtitleTrackProps> = ({ fileId, label, language, isDefault, offsetSeconds }) => {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let url = '';
+
+    fetch(`${PROXY_BASE_URL}/api/subtitles/download/${fileId}`)
+      .then((res) => res.text())
+      .then((text) => {
+        if (!active) return;
+        const shiftedText = shiftVttTimestamps(text, offsetSeconds);
+        const blob = new Blob([shiftedText], { type: 'text/vtt' });
+        url = URL.createObjectURL(blob);
+        setBlobUrl(url);
+      })
+      .catch((err) => console.error(`Failed to load subtitle ${fileId}:`, err));
+
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [fileId, offsetSeconds]);
+
+  if (!blobUrl) return null;
+
+  return (
+    <Track
+      src={blobUrl}
+      kind="subtitles"
+      label={label}
+      language={language}
+      type="vtt"
+      default={isDefault}
+    />
+  );
+};
 
 interface PlayerOverlaysProps {
   poster?: string;
@@ -67,20 +117,29 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
   const canPlay = useMediaState('canPlay');
   const playing = useMediaState('playing');
   const error = useMediaState('error');
+  const videoWidth = useMediaState('mediaWidth'); // Using mediaWidth to detect missing video
 
   const isLoading = !canPlay && !playing;
   const hasError = !!error;
-  const errorMessage = error?.message || 'Failed to load video stream';
+  let errorMessage = error?.message || 'An unknown error occurred during playback.';
+  
+  if (errorMessage.includes('hlsError')) {
+    errorMessage = 'Torrent is dead or timed out. No seeders could be found for this stream.';
+  }
 
   const [revealProgress, setRevealProgress] = useState(0);
   const [isFadingOut, setIsFadingOut] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
   const [showProxyPanel, setShowProxyPanel] = useState(false);
+  const [showCodecWarning, setShowCodecWarning] = useState(false);
 
   // Telemetry HUD state from Redux
+  const dispatch = useDispatch<AppDispatch>();
   const globalStats = useSelector((state: RootState) => state.telemetry.stats);
   const telemetry = globalStats?.torrents?.find((t) => t.infoHash === infoHash) || 
                    (globalStats?.torrents?.length ? globalStats.torrents[globalStats.torrents.length - 1] : null);
+
+  const { subtitleOffset, activeFileId } = useSelector((state: RootState) => state.subtitles);
 
   const proxyDuration = telemetry?.durationSeconds ?? null;
 
@@ -100,7 +159,7 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
   useEffect(() => {
     if (isLoading && telemetry?.progress) {
       const realProgress = parseFloat(telemetry.progress);
-      setRevealProgress(Math.min(90, realProgress));
+      setRevealProgress(Math.min(95, realProgress));
     } else if (!isLoading) {
       setRevealProgress(100);
     }
@@ -108,14 +167,38 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
 
   // Smooth overlay fade-out when loading and reveal complete
   useEffect(() => {
-    if (revealProgress === 100 && showOverlay && !isFadingOut) {
+    if (revealProgress >= 95 && showOverlay && !isFadingOut) {
       const timer = setTimeout(() => {
         setIsFadingOut(true);
         setTimeout(() => setShowOverlay(false), 650);
-      }, 300); // Give the 100% wipe a moment to finish visually
+      }, 300); // Give the wipe a moment to finish visually
       return () => clearTimeout(timer);
     }
   }, [revealProgress, showOverlay, isFadingOut]);
+
+  // Safety net: force dismiss overlay after 15s regardless of state
+  useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      if (showOverlay) {
+        setIsFadingOut(true);
+        setTimeout(() => setShowOverlay(false), 650);
+      }
+    }, 15000);
+    return () => clearTimeout(safetyTimer);
+  }, []); // Empty deps, only run on mount
+
+  // Playback health check: If playing for 8 seconds but no video frames (width === 0)
+  useEffect(() => {
+    if (playing && videoWidth === 0 && !showOverlay) {
+      const healthTimer = setTimeout(() => {
+        // If still playing and no video width after 8 seconds
+        setShowCodecWarning(true);
+      }, 8000);
+      return () => clearTimeout(healthTimer);
+    } else if (videoWidth > 0) {
+      setShowCodecWarning(false);
+    }
+  }, [playing, videoWidth, showOverlay]);
 
   return (
     <>
@@ -141,6 +224,21 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
         </div>
       )}
 
+      {/* Codec Warning Banner */}
+      {showCodecWarning && (
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-3 rounded-lg bg-red-500/90 backdrop-blur-md border border-red-400 text-white shadow-lg animate-in fade-in slide-in-from-top-4">
+          <AlertTriangle className="w-5 h-5" />
+          <span className="text-sm font-medium">
+            This stream's video codec may not be supported by your browser. Try the VLC option for full compatibility.
+          </span>
+          <button 
+            onClick={() => setShowCodecWarning(false)}
+            className="ml-2 text-white/80 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Loading Overlay with Progress Reveal */}
       {showOverlay && !hasError && (
@@ -201,6 +299,29 @@ const PlayerOverlays: React.FC<PlayerOverlaysProps> = ({
         </div>
       )}
 
+      {/* Subtitle Sync Controls */}
+      {activeFileId && (
+        <div className="absolute top-3 right-28 z-30 flex items-center bg-black/70 backdrop-blur-md rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-auto">
+          <button
+            onClick={() => dispatch(setSubtitleOffset(subtitleOffset - 0.25))}
+            className="px-3 py-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-l-full font-mono text-sm"
+            title="Delay Subtitles (-0.25s)"
+          >
+            -
+          </button>
+          <div className="px-2 py-1.5 text-xs font-medium text-gray-300 border-x border-white/10 min-w-[70px] text-center pointer-events-none">
+            Sync: {subtitleOffset > 0 ? '+' : ''}{subtitleOffset.toFixed(2)}s
+          </div>
+          <button
+            onClick={() => dispatch(setSubtitleOffset(subtitleOffset + 0.25))}
+            className="px-3 py-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-r-full font-mono text-sm"
+            title="Advance Subtitles (+0.25s)"
+          >
+            +
+          </button>
+        </div>
+      )}
+
       {/* Local Proxy Engine Button */}
       <button
         onClick={() => setShowProxyPanel(prev => !prev)}
@@ -237,10 +358,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   src,
   poster,
   infoHash,
+  imdbId,
   onClose,
 }) => {
+  const dispatch = useDispatch<AppDispatch>();
   const playerRef = useRef<MediaPlayerInstance>(null);
-  const { audioLanguage, requireSubtitles } = useSelector((state: RootState) => state.config);
+  const { audioLanguage, subtitleLanguage, requireSubtitles } = useSelector((state: RootState) => state.config);
+  const { tracks: subtitleTracks, activeFileId, subtitleOffset } = useSelector((state: RootState) => state.subtitles);
+
+  // Fetch OpenSubtitles when imdbId changes
+  useEffect(() => {
+    if (imdbId) {
+      dispatch(fetchSubtitles({ imdbId, lang: subtitleLanguage }));
+    } else {
+      dispatch(clearSubtitles());
+    }
+
+    return () => {
+      dispatch(clearSubtitles());
+    };
+  }, [imdbId, subtitleLanguage, dispatch]);
 
   useEffect(() => {
     logPlaybackEvent({
@@ -262,7 +399,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       if (requireSubtitles && textTracks.length > 0) {
         const textTrack = textTracks.find(t => t.kind === 'subtitles' || t.kind === 'captions');
-        if (textTrack) textTrack.mode = 'showing';
+        if (textTrack && textTrack.mode !== 'showing') {
+          textTrack.mode = 'showing';
+        }
       }
     });
     
@@ -321,7 +460,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
         className="w-full h-full object-contain"
       >
-        <MediaProvider />
+        <MediaProvider>
+          {subtitleTracks.map((sub, idx) => (
+            <SubtitleTrack
+              key={sub.fileId}
+              fileId={sub.fileId}
+              label={sub.label}
+              language={sub.language}
+              isDefault={requireSubtitles && (activeFileId === sub.fileId || (!activeFileId && idx === 0))}
+              offsetSeconds={subtitleOffset}
+            />
+          ))}
+        </MediaProvider>
         <DefaultVideoLayout icons={defaultLayoutIcons} />
         
         {/* Natively embedded overlays inside Vidstack player context */}

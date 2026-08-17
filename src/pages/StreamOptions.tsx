@@ -214,14 +214,15 @@ export const StreamOptions: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto pb-12 flex flex-col gap-8" ref={playerContainerRef}>
-      {/* Full-Width Player Mode when playingUrl is active */}
-      {playingUrl ? (
+      {/* Full-Width Player Mode when a stream is selected (even if URL is still resolving) */}
+      {playingInfoHash ? (
         <div className="w-full flex flex-col gap-6">
           <div className="w-full bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl">
             <VideoPlayer
-              src={playingUrl}
+              src={playingUrl || ''}
               poster={poster}
               infoHash={playingInfoHash}
+              imdbId={imdbId}
               onClose={() => dispatch(closePlayer())}
             />
           </div>
@@ -266,7 +267,7 @@ export const StreamOptions: React.FC = () => {
           {/* Left Sidebar: Poster */}
           <div className="w-full md:w-1/3 flex flex-col gap-6">
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-xl sticky top-24">
-              <div className="relative aspect-[2/3] bg-gray-800">
+              <div className="relative aspect-[3/4] bg-gray-800">
                 {poster ? (
                   <img src={poster} alt={title} className="w-full h-full object-cover" />
                 ) : (
